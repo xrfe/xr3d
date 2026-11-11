@@ -28,13 +28,8 @@ AI-generated geometry may need repair and dimensional adjustment before printing
 
 ## Get the Android app
 
-Open the project in Android Studio and build a debug version, or build on Windows with a configured JDK and Android SDK:
-
-```powershell
-.\gradlew.bat :app:testLiteDebugUnitTest :app:assembleLiteDebug
-```
-
-The debug APK is created at `app/build/outputs/apk/lite/debug/app-lite-debug.apk`. Install it on your Android device using Android Studio or your usual APK installation method. A debug APK is not a signed production release.
+Download it from android play store:
+## 🖨️ [XR3D: 3D Printing Any Images](https://play.google.com/store/apps/details?id=com.feaxr.xr3d)
 
 ## Generate online with Meshy — no server
 
