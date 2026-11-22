@@ -1,4 +1,4 @@
-# XR3D inference server
+# XR3D Studio server
 
 The Android app sends a **real source image** to this API, runs local or hosted inference, downloads a validated model, and stores it in the project. It never substitutes a procedural sample when inference fails.
 
@@ -7,11 +7,20 @@ The Android app sends a **real source image** to this API, runs local or hosted 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
+.\.venv\Scripts\python.exe -m backend.install_print_engine
 Copy-Item .env.example .env
 .\.venv\Scripts\python.exe -m backend.serve
 ```
 
 The launcher generates a random `XR3D_API_TOKEN` in `.env` if it is empty. Enter it in the existing **Settings → XR3D server access token** field. Do not enter a fal credential in the phone: the phone uses the private server token, while hosted credentials stay in `.env` on the server.
+
+The default XR3D Print Engine runs in an isolated `.venv-print` environment. Android connects directly to supported printers and asks the server for discovery if its local scan found nothing. OctoPrint, Moonraker, and PrusaLink use the server when their direct connection fails. Duet runs through the server. The Adventurer 5M and 5M Pro retain their own direct LAN protocol and authenticated fallback. Bambu uses the certificate-pinned LAN bridge. Direct LAN printing and on-device Flashforge slicing can run with the server offline. See [third-party source and notices](PRINT-ENGINE-NOTICE.md).
+
+### Server model checks and MCP
+
+Authenticated `GET /api/v1/print-engine` reports engine health, `GET /api/v1/print-engine/discover` finds printer advertisements from the server's LAN, and `POST /api/v1/print-engine/inspect` accepts a multipart `model` field containing an STL up to 24 MB. Its optional `config` JSON accepts `nozzleMm` and `buildVolumeMm`. Results include dimensions, triangle count, printability, and recommendations.
+
+Configure your local MCP client to run the studio's Python interpreter with `-m backend.studio_mcp` from the project root while the XR3D server is running. The MCP server is named **XR3D Studio** and offers `discover_printers`, `inspect_stl`, and `printer_status`. `--model-dir` sets the directory the model tool can access. `--printers` points to a local JSON map of printer names to the same profiles accepted by `/printers/vendor/status`. Keep that file private because it can contain LAN access codes. `--api` selects a loopback HTTP or HTTPS studio API URL. Print starts go through the app's confirmation and one-use upload receipt.
 
 In the app select **TRELLIS.2**, set the endpoint to:
 
@@ -52,7 +61,7 @@ The included worker follows the upstream `Trellis2ImageTo3DPipeline` and `o_voxe
 
 Hunyuan can use a custom local worker through the same file contract with `XR3D_LOCAL_PROVIDER=HUNYUAN_3D`, or a compatible fal endpoint configured with `FAL_HUNYUAN_MODEL`. The generic hosted adapter expects an `image_url` input and `model_glb` or `model_mesh` output; verify the exact model schema before enabling it. There is no bundled Hunyuan worker.
 
-The app's existing Tripo/Pixal entries remain in the layout for compatibility, but the bundled server reports them as unconfigured. Their original adapters were fictitious. Adding a model means adding a verified server adapter, not changing the app's `/jobs` contract. Custom REST can target another compatible XR3D server.
+The bundled app hides Tripo and Pixal because the server reports them as unconfigured. A new provider needs a verified server adapter that follows the existing `/jobs` contract. Custom REST can target another compatible XR3D server.
 
 ## Geometry and export
 
@@ -70,7 +79,7 @@ Resin and SLM require machine-specific slicers and are unavailable in this build
 
 Interactive docs: `/api/v1/docs`; health: `/health`. All model, provider, and slicer endpoints require `Authorization: Bearer XR3D_API_TOKEN`. This is a **single-owner private studio server**, not a multi-tenant service. Use separate instances/tokens per owner; per-user accounts, quotas, billing and tenant isolation are not implemented.
 
-Authenticated `/ready` returns inference/slicer configuration status, not live provider or GPU validation. The pending-job queue defaults to 8 (`XR3D_MAX_PENDING_JOBS`); cancel abandoned jobs when full. Offline backups and dry-run retention are provided by `python -m backend.maintenance`; stop the API first. See [release operations and acceptance](../docs/release-readiness.md).
+Authenticated `/ready` returns inference/slicer configuration status, not live provider or GPU validation. The pending-job queue defaults to 8 (`XR3D_MAX_PENDING_JOBS`). Waiting uploads expire after 900 seconds by default (`XR3D_UPLOAD_TTL_SECONDS`, minimum 60). Expiry releases the slot and removes partial input files. You can also cancel an abandoned job. Offline backups and dry-run retention are provided by `python -m backend.maintenance`; stop the API first. See [release operations and acceptance](../docs/release-readiness.md).
 
 The private server also bridges Bambu MQTT/FTPS and FLASHFORGE Adventurer 5M HTTP under authenticated `/api/v1/printers/vendor` routes. These adapters work independently of AI inference configuration. See [printer adapter setup and limitations](../docs/printer-adapters.md), including trusted Bambu certificate installation and the separate printer LAN access/check code.
 
