@@ -9,10 +9,11 @@ import time
 import uuid
 from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from backend.config import settings
 from backend.security import require_token
 from backend.services.vendor_printers import VendorProfile, VendorError, adapter, filename
+from backend.services.print_engine import EngineError, EngineUnavailable, EngineTimeout
 
 router = APIRouter(prefix="/printers/vendor", tags=["Vendor printers"], dependencies=[Depends(require_token)])
 capacity = asyncio.Semaphore(4)
@@ -29,6 +30,11 @@ class StartRequest(BaseModel):
 class ActionRequest(BaseModel):
     profile: VendorProfile
     action: Literal["pause", "resume", "cancel"]
+
+
+class ThumbnailRequest(BaseModel):
+    profile: VendorProfile
+    filename: str = Field(min_length=1, max_length=255)
 
 
 async def perform(profile, operation):
@@ -50,7 +56,11 @@ async def perform(profile, operation):
             except asyncio.CancelledError:
                 await task
                 raise
-    except VendorError as error:
+    except EngineUnavailable as error:
+        raise HTTPException(503, str(error)) from error
+    except EngineTimeout as error:
+        raise HTTPException(504, str(error)) from error
+    except (VendorError, EngineError) as error:
         raise HTTPException(502, str(error)) from error
     except (OSError, ValueError, RuntimeError, ftplib.Error, httpx.HTTPError) as error:
         raise HTTPException(502, "Printer transport failed. Check LAN connectivity, credentials, certificate and printer state before retrying.") from error
@@ -59,6 +69,14 @@ async def perform(profile, operation):
 @router.post("/status")
 async def status(profile: VendorProfile):
     return await perform(profile, lambda device: device.status())
+
+
+@router.post("/thumbnail")
+async def thumbnail(request: ThumbnailRequest):
+    if request.profile.type != "FLASHFORGE":
+        raise HTTPException(422, "Job previews are available for the FLASHFORGE 5M series")
+    image = await perform(request.profile, lambda device: device.thumbnail(request.filename))
+    return {"imageBase64": image}
 
 
 @router.post("/upload")

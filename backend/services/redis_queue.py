@@ -12,7 +12,29 @@ class JobStore:
         self.lock = threading.RLock()
         self.db = sqlite3.connect(directory / "jobs.sqlite3", check_same_thread=False)
         self.db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (json_extract(payload, '$.status'))"
+        )
         self.db.commit()
+
+    def pending_count(self):
+        with self.lock:
+            return self.db.execute(
+                "SELECT COUNT(*) FROM jobs WHERE json_extract(payload, '$.status') IN ('QUEUED', 'PROCESSING')"
+            ).fetchone()[0]
+
+    def expire_waiting_uploads(self, cutoff):
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT payload FROM jobs WHERE json_extract(payload, '$.status') = 'QUEUED' "
+                "AND json_extract(payload, '$.submitted') = 0 AND json_extract(payload, '$.updated_at') < ?",
+                (cutoff,),
+            ).fetchall()
+            expired = [json.loads(row[0]) for row in rows]
+            for job in expired:
+                self.update(job["job_id"], status="FAILED", current_step_name="Source upload expired",
+                            error_message="Source upload expired. Start reconstruction again.")
+            return [job["job_id"] for job in expired]
 
     def save(self, job):
         with self.lock:

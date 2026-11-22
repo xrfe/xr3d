@@ -20,6 +20,12 @@ def main():
         print("A server access token was saved to .env. Enter that token in the app Settings.")
     if not (os.getenv("XR3D_LOCAL_COMMAND") or os.getenv("FAL_KEY") or os.getenv("MESHY_API_KEY")):
         print("No server inference key/runtime configured. Set XR3D_LOCAL_COMMAND, FAL_KEY, or MESHY_API_KEY; Meshy users can also supply their own key in the app.")
+    from backend.services.print_engine import EngineError, run_engine
+    try:
+        run_engine("health", timeout=10)
+        print("XR3D Print Engine is ready for server discovery, model checks, and printer fallback.")
+    except EngineError:
+        print("XR3D Print Engine is unavailable. Run python -m backend.install_print_engine to enable those server functions.")
     import uvicorn
     uvicorn.run("backend.main:app", host=args.host, port=args.port, workers=1)
 

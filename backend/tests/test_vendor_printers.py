@@ -1,5 +1,6 @@
 """Protocol fixtures only: no tests contact a physical printer or cloud service."""
 from contextlib import contextmanager
+import base64
 import io
 import json
 from pathlib import Path
@@ -9,6 +10,7 @@ import threading
 import zipfile
 import httpx
 import pytest
+from PIL import Image
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.config import settings
@@ -80,6 +82,59 @@ def test_flashforge_unknown_state_is_not_ready():
     adapter = vendors.FlashforgeAdapter(profile(), httpx.MockTransport(lambda _: httpx.Response(200,json=detail("unknown"))))
     assert adapter.status()["connectionState"] == "ERROR"
     adapter.close()
+
+
+def test_flashforge_monitor_preserves_missing_readings_and_suspends_eta():
+    state = "printing"
+    packet = {"printLayer": 12, "targetPrintLayer": 42, "printDuration": 93, "platTemp": None}
+    adapter = vendors.FlashforgeAdapter(profile(), httpx.MockTransport(
+        lambda _: httpx.Response(200, json=detail(state, **packet))))
+    try:
+        reading = adapter.status()["monitor"]
+        assert reading["phase"] == "PRINTING" and reading["progressPercent"] == 25
+        assert reading["currentLayer"] == 12 and reading["totalLayers"] == 42
+        assert reading["elapsedSeconds"] == 93 and reading["remainingSeconds"] == 120
+        assert reading["bedActualC"] is None and reading["bedTargetC"] == 60
+        for state in ("pause", "heating"):
+            status = adapter.status()
+            assert status["timeRemainingSeconds"] == 120
+            assert status["monitor"]["remainingSeconds"] is None
+        state = "completed"
+        assert adapter.status()["monitor"]["phase"] == "COMPLETED"
+    finally:
+        adapter.close()
+
+
+def test_flashforge_thumbnail_uses_authenticated_read_only_route(monkeypatch):
+    monkeypatch.setattr(settings, "API_TOKEN", "test-token")
+    monkeypatch.setattr(routes, "device_locks", {})
+    bitmap = io.BytesIO()
+    Image.new("RGB", (140, 110), color="blue").save(bitmap, format="BMP")
+    image = base64.b64encode(bitmap.getvalue()).decode()
+    calls = []
+
+    def serve(request):
+        calls.append(request.url.path)
+        assert json.loads(request.content) == {
+            "serialNumber": "XR3DTEST123", "checkCode": "12345678", "fileName": "My part.gcode"
+        }
+        return httpx.Response(200, json={"code": 0, "imageData": image})
+
+    monkeypatch.setattr(routes, "adapter", lambda target: vendors.FlashforgeAdapter(target, httpx.MockTransport(serve)))
+    body = {"profile": {**profile().model_dump(mode="json"), "accessCode": "12345678"}, "filename": "My part.gcode"}
+    client = TestClient(app)
+    path = "/api/v1/printers/vendor/thumbnail"
+    assert client.post(path, json=body).status_code == 401
+    client.headers["Authorization"] = "Bearer test-token"
+    assert client.post(path, json={**body, "filename": "../secret"}).status_code == 502
+    response = client.post(path, json=body)
+    assert response.status_code == 200
+    with Image.open(io.BytesIO(base64.b64decode(response.json()["imageBase64"]))) as preview:
+        assert preview.format == "PNG" and preview.size == (140, 110)
+    image = "invalid base64"
+    assert client.post(path, json=body).json() == {"imageBase64": None}
+    assert calls == ["/gcodeThumb", "/gcodeThumb"]
+    client.close()
 
 
 def test_bambu_package_rejects_model_only_and_multi_filament(tmp_path):

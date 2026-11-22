@@ -3,6 +3,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from backend.config import settings
@@ -10,13 +11,14 @@ from backend.schemas import ReconstructionRequest, ReconstructionJobResponse
 from backend.security import require_token
 from backend.services.redis_queue import JobStore
 from backend.services.inference import available, infer, convert_model
+from backend.services.meshy import PROVIDERS as MESHY_PROVIDERS, key_for
 
 router = APIRouter(prefix="/reconstruct", tags=["Reconstruction"], dependencies=[Depends(require_token)])
 store = JobStore(settings.DATA_DIR)
 tasks = {}
 gpu_lock = asyncio.Lock()
 logger = logging.getLogger(__name__)
-from backend.services.meshy import PROVIDERS as MESHY_PROVIDERS, key_for
+image_processing = asyncio.Semaphore(2)
 
 def get_job(job_id):
     job = store.get(job_id)
@@ -24,9 +26,45 @@ def get_job(job_id):
         raise HTTPException(404, "Reconstruction job not found")
     return job
 
+def expire_uploads():
+    for job_id in store.expire_waiting_uploads(time.time() - settings.UPLOAD_TTL_SECONDS):
+        try:
+            if str(uuid.UUID(job_id)) != job_id:
+                continue
+        except ValueError:
+            continue
+        directory = settings.DATA_DIR / job_id
+        if directory.is_symlink():
+            continue
+        for pattern in ("input-*.image", "input-*.png"):
+            for path in directory.glob(pattern):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not clean expired source file for job %s", job_id)
+
+
+def normalize_image(source: Path, target: Path, is_meshy: bool):
+    from PIL import Image, ImageOps
+
+    with Image.open(source) as decoded:
+        if decoded.format not in ("JPEG", "PNG", "WEBP") or decoded.width * decoded.height > 50_000_000:
+            raise ValueError("Unsupported image format or size")
+        if is_meshy and min(decoded.size) < 32:
+            raise ValueError("Meshy images need at least 32 pixels per side")
+        decoded.verify()
+    with Image.open(source) as decoded:
+        decoded.thumbnail((4096, 4096))
+        with ImageOps.exif_transpose(decoded) as oriented, oriented.convert("RGBA") as normalized:
+            normalized.save(target, format="PNG")
+    if target.stat().st_size > settings.MAX_IMAGE_BYTES:
+        raise ValueError("Normalized image exceeds upload size limit")
+
+
 @router.post("/jobs", response_model=ReconstructionJobResponse, status_code=201)
 async def create_job(request: ReconstructionRequest):
-    if sum(job["status"] in ("QUEUED", "PROCESSING") for job in store.all()) >= settings.MAX_PENDING_JOBS:
+    expire_uploads()
+    if store.pending_count() >= settings.MAX_PENDING_JOBS:
         raise HTTPException(429, "Job queue is full. Finish or cancel an existing job before retrying.", headers={"Retry-After": "30"})
     if request.provider.value == "CUSTOM_REST":
         from backend.schemas import ProviderType
@@ -92,45 +130,41 @@ async def upload_images(job_id: str, images: list[UploadFile] = File(...), x_mes
     directory = settings.DATA_DIR / job_id
     directory.mkdir(exist_ok=True)
     paths = []
+    temporary_files = []
+    accepted = False
     try:
-        from PIL import Image, ImageOps
-        for index, image in enumerate(images):
-            path = directory / f"input-{uuid.uuid4().hex}.image"
+        for image in images:
+            source = directory / f"input-{uuid.uuid4().hex}.image"
+            normalized = source.with_suffix(".png")
+            temporary_files.extend((source, normalized))
             size = 0
-            with path.open("wb") as output:
+            with source.open("wb") as output:
                 while chunk := await image.read(65536):
                     size += len(chunk)
                     if size > settings.MAX_IMAGE_BYTES:
                         raise HTTPException(413, "Image exceeds 20 MB")
                     output.write(chunk)
             try:
-                with Image.open(path) as decoded:
-                    if decoded.format not in ("JPEG", "PNG", "WEBP"):
-                        raise ValueError("Unsupported image")
-                    if decoded.width * decoded.height > 50_000_000:
-                        raise ValueError("Image resolution exceeds limit")
-                    if job["provider"] in MESHY_PROVIDERS and min(decoded.size) < 32:
-                        raise ValueError("Meshy images need at least 32 pixels per side")
-                    decoded.verify()
-                with Image.open(path) as decoded:
-                    normalized = ImageOps.exif_transpose(decoded).convert("RGBA")
-                    normalized.thumbnail((4096, 4096))
-                    normalized_path = path.with_suffix(".png")
-                    normalized.save(normalized_path, format="PNG")
-                if normalized_path.stat().st_size > settings.MAX_IMAGE_BYTES:
-                    raise ValueError("Normalized image exceeds upload size limit")
-                path.unlink()
-                path = normalized_path
+                async with image_processing:
+                    await asyncio.to_thread(normalize_image, source, normalized, job["provider"] in MESHY_PROVIDERS)
+                source.unlink()
             except Exception as error:
-                raise HTTPException(422, "Provide a valid JPEG, PNG or WebP image") from error
-            paths.append(path)
+                raise HTTPException(422, "Provide a valid JPEG, PNG or WebP image within the size limit") from error
+            paths.append(normalized)
         current = get_job(job_id)
         if current["submitted"] or current["status"] != "QUEUED":
             raise HTTPException(409, "Job has already been submitted or cancelled")
         store.update(job_id, submitted=True, image_paths=[str(path) for path in paths], current_step_name="Queued for inference")
+        accepted = True
         tasks[job_id] = asyncio.create_task(execute(job_id, paths, meshy_key))
         return {"jobId": job_id, "uploadedCount": len(paths), "status": "QUEUED"}
     finally:
+        if not accepted:
+            for path in temporary_files:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not clean rejected source file for job %s", job_id)
         for image in images:
             await image.close()
 
@@ -166,6 +200,7 @@ async def download(job_id: str):
 
 @asynccontextmanager
 async def lifespan(app):
+    expire_uploads()
     for job in store.all():
         if job["status"] in ("PROCESSING", "QUEUED") and job["submitted"]:
             if job["provider"] in MESHY_PROVIDERS and job.get("meshy_task_id"):

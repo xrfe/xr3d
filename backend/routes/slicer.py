@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 import tempfile
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from backend.security import require_token
 from backend.config import settings
 from backend.services.slicing import SlicingOptions
@@ -27,9 +28,12 @@ async def slice_model(model: UploadFile = File(...), config: str = Form(...)):
     if not profile or not Path(profile).is_file():
         raise HTTPException(503, "Configure XR3D_SLICER_PROFILE with a calibrated PrusaSlicer printer profile (.ini)")
     import trimesh
-    with tempfile.TemporaryDirectory(dir=settings.DATA_DIR) as folder:
-        source = Path(folder) / "input.stl"
-        output = Path(folder) / "output.gcode"
+    temporary = tempfile.TemporaryDirectory(dir=settings.DATA_DIR)
+    keep_output = False
+    try:
+        folder = Path(temporary.name)
+        source = folder / "input.stl"
+        output = folder / "output.gcode"
         size = 0
         try:
             with source.open("wb") as stream:
@@ -60,8 +64,15 @@ async def slice_model(model: UploadFile = File(...), config: str = Form(...)):
                         raise HTTPException(502, "PrusaSlicer failed; verify the installed CLI and settings")
                     if output.stat().st_size > settings.MAX_MODEL_BYTES:
                         raise HTTPException(413, "Generated toolpath exceeds size limit")
-                    return Response(output.read_bytes(), media_type="text/plain")
+                    response = FileResponse(output, media_type="text/plain", background=BackgroundTask(temporary.cleanup))
+                    keep_output = True
+                    return response
+                except TimeoutError as error:
+                    raise HTTPException(504, "PrusaSlicer exceeded its time limit") from error
                 finally:
                     if process.returncode is None:
                         process.kill()
                         await process.wait()
+    finally:
+        if not keep_output:
+            temporary.cleanup()

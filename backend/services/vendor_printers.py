@@ -3,10 +3,12 @@
 No automatic retries of physical commands. All methods are blocking and run off
 the API event loop. Printer credentials are held only for the current request.
 """
+import base64
 from collections import deque
 from contextlib import contextmanager
 import ftplib
 import hashlib
+import io
 import ipaddress
 import json
 import math
@@ -19,7 +21,9 @@ import time
 import uuid
 import zipfile
 import httpx
+from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from backend.services.print_engine import SUPPORTED_PRINTERS, run_engine
 
 
 class VendorError(Exception):
@@ -27,12 +31,13 @@ class VendorError(Exception):
 
 
 class VendorProfile(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: str = Field(pattern=r"^(BAMBU_LAB|FLASHFORGE)$")
+    model_config = ConfigDict(extra="forbid", validate_default=True)
+    type: str
     host: str
-    port: int
-    serialNumber: str = Field(pattern=r"^[A-Za-z0-9_-]{4,64}$")
-    accessCode: SecretStr = Field(min_length=1, max_length=64)
+    port: int = Field(ge=1, le=65535)
+    serialNumber: str = Field(default="", max_length=64)
+    accessCode: SecretStr = Field(default="", max_length=256)
+    scheme: str = Field(default="http", pattern=r"^https?$")
 
     @field_validator("host")
     @classmethod
@@ -44,14 +49,21 @@ class VendorProfile(BaseModel):
 
     @model_validator(mode="after")
     def fixed_service_port(self):
-        if self.port != (8883 if self.type == "BAMBU_LAB" else 8898):
-            raise ValueError("Use MQTT TLS port 8883 for Bambu or HTTP port 8898 for FLASHFORGE 5M")
-        if not re.fullmatch(r"[A-Za-z0-9_-]+", self.accessCode.get_secret_value()):
-            raise ValueError("Invalid LAN access code")
+        if self.type in {"BAMBU_LAB", "FLASHFORGE"}:
+            if self.port != (8883 if self.type == "BAMBU_LAB" else 8898) or self.scheme != "http":
+                raise ValueError("Use the printer's standard vendor service port")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{4,64}", self.serialNumber) or not re.fullmatch(
+                    r"[A-Za-z0-9_-]{1,64}", self.accessCode.get_secret_value()):
+                raise ValueError("Invalid LAN access code or serial number")
+        elif self.type in SUPPORTED_PRINTERS:
+            if self.serialNumber or not re.fullmatch(r"[\x20-\x7e]*", self.accessCode.get_secret_value()):
+                raise ValueError("Invalid printer credential")
+        else:
+            raise ValueError("Unsupported printer type")
         return self
 
     def identity(self):
-        return self.type, self.host, self.port, self.serialNumber
+        return self.type, self.host, self.port, self.serialNumber, self.scheme
 
 
 def filename(value: str, suffix: str) -> str:
@@ -66,6 +78,35 @@ def numeric(value, default=0):
         return result if math.isfinite(result) else default
     except (ValueError, TypeError):
         return default
+
+
+def reading(data, key, maximum):
+    value = data.get(key)
+    if isinstance(value, bool):
+        return None
+    value = numeric(value, None)
+    return value if value is not None and 0 <= value <= maximum else None
+
+
+def flashforge_monitor(data, phase):
+    current = reading(data, "printLayer", 100000)
+    total = reading(data, "targetPrintLayer", 100000)
+    if not total or current is not None and current > total:
+        current = total = None
+    progress = reading(data, "printProgress", 1)
+    remaining = reading(data, "estimatedTime", 31536000) if phase == "PRINTING" else None
+    return {
+        "phase": phase,
+        "progressPercent": progress * 100 if progress is not None else None,
+        "elapsedSeconds": reading(data, "printDuration", 31536000),
+        "remainingSeconds": remaining if remaining else None,
+        "currentLayer": current,
+        "totalLayers": total,
+        "nozzleActualC": reading(data, "rightTemp", 500),
+        "nozzleTargetC": reading(data, "rightTargetTemp", 500),
+        "bedActualC": reading(data, "platTemp", 500),
+        "bedTargetC": reading(data, "platTargetTemp", 500),
+    }
 
 
 def snapshot(state, data, fields):
@@ -117,8 +158,38 @@ class FlashforgeAdapter:
         raw = str(data.get("status", "")).lower()
         state = {"printing": "PRINTING", "heating": "PRINTING", "pausing": "PAUSED", "pause": "PAUSED",
                  "ready": "CONNECTED", "completed": "CONNECTED", "cancel": "CONNECTED"}.get(raw, "ERROR")
-        return snapshot(state, data, ("printFileName", "printProgress", 100, "estimatedTime", 1,
-                                     "rightTemp", "rightTargetTemp", "platTemp", "platTargetTemp"))
+        phase = {"printing": "PRINTING", "heating": "HEATING", "pausing": "PAUSED", "pause": "PAUSED",
+                 "ready": "IDLE", "completed": "COMPLETED", "cancel": "CANCELLED"}.get(raw, "ERROR")
+        result = snapshot(state, data, ("printFileName", "printProgress", 100, "estimatedTime", 1,
+                                      "rightTemp", "rightTargetTemp", "platTemp", "platTargetTemp"))
+        result["monitor"] = flashforge_monitor(data, phase)
+        return result
+
+    def thumbnail(self, name):
+        # The printer accepts display names with spaces. Restrict the request to a single filename.
+        if not name.strip() or name in (".", "..") or re.search(r"[/\\\x00-\x1f\x7f]", name):
+            raise VendorError("Invalid printer job filename")
+        data = self.request("gcodeThumb", json={**self.auth(), "fileName": name}, timeout=4.0).get("imageData")
+        if not isinstance(data, str) or len(data) > 700000:
+            return None
+        try:
+            image = base64.b64decode(data, validate=True)
+        except ValueError:
+            return None
+        if len(image) > 512 * 1024:
+            return None
+        # The stock Adventurer 5M can return a BMP even though other jobs return PNG.
+        try:
+            with Image.open(io.BytesIO(image), formats=("PNG", "JPEG", "BMP")) as preview:
+                if not (1 <= preview.width <= 2048 and 1 <= preview.height <= 2048):
+                    return None
+                preview.thumbnail((512, 512))
+                mode = "RGBA" if "A" in preview.getbands() or "transparency" in preview.info else "RGB"
+                output = io.BytesIO()
+                preview.convert(mode).save(output, format="PNG")
+        except (OSError, ValueError, Image.DecompressionBombError):
+            return None
+        return base64.b64encode(output.getvalue()).decode("ascii") if output.tell() <= 512 * 1024 else None
 
     def upload(self, path, name):
         filename(name, ".gcode")
@@ -325,5 +396,38 @@ class BambuAdapter:
             session.command({"pause": "pause", "resume": "resume", "cancel": "stop"}[action], param="")
 
 
+class PrintEngineAdapter:
+    """Translate the existing printer API into the default server engine's operations."""
+
+    def __init__(self, profile):
+        self.profile = profile.model_dump(exclude={"accessCode"})
+        self.profile["accessCode"] = profile.accessCode.get_secret_value()
+
+    def close(self):
+        pass  # The isolated worker closes its device session after each operation.
+
+    def status(self):
+        return run_engine("status", profile=self.profile)
+
+    def upload(self, path, name):
+        filename(name, ".gcode")
+        with path.open("rb") as stream:
+            if b"\x00" in stream.read(8192):
+                raise VendorError("Select a plain printer-sliced G-code file")
+        original = path.with_name(name)
+        path.rename(original)
+        return run_engine("upload", profile=self.profile, path=str(original.resolve()), timeout=250)
+
+    def start(self, uploaded):
+        run_engine("start", profile=self.profile, filename=filename(uploaded["filename"], ".gcode"), timeout=60)
+
+    def action(self, action):
+        run_engine("action", profile=self.profile, action=action)
+
+
 def adapter(profile):
-    return BambuAdapter(profile) if profile.type == "BAMBU_LAB" else FlashforgeAdapter(profile)
+    if profile.type == "BAMBU_LAB":
+        return BambuAdapter(profile)
+    if profile.type == "FLASHFORGE":
+        return FlashforgeAdapter(profile)
+    return PrintEngineAdapter(profile)

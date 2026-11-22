@@ -60,6 +60,7 @@ def test_upload_validation_and_cancel_before_submit(client):
     job_id = create(client).json()["jobId"]
     url = f"/api/v1/reconstruct/jobs/{job_id}"
     assert client.post(url + "/images", files={"images": ("bad.png", b"not an image")}).status_code == 422
+    assert not list((settings.DATA_DIR / job_id).glob("input-*"))
     assert client.post(url + "/images", files=[("images", ("a.png", image())), ("images", ("b.png", image()))]).status_code == 422
     assert client.post(url + "/cancel").json()["status"] == "CANCELLED"
     assert client.post(url + "/images", files={"images": ("a.png", image())}).status_code == 409

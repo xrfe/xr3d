@@ -42,6 +42,37 @@ def test_queue_limit_released_after_cancel(tmp_path, monkeypatch):
     client.close(); store.db.close()
 
 
+def test_abandoned_upload_releases_slot_after_restart(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(settings, "API_TOKEN", "test-token")
+    monkeypatch.setattr(settings, "MAX_PENDING_JOBS", 1)
+    monkeypatch.setattr(routes, "available", lambda _: True)
+    store = JobStore(tmp_path)
+    monkeypatch.setattr(routes, "store", store)
+    headers = {"Authorization": "Bearer test-token"}
+    with TestClient(app, headers=headers) as client:
+        reply = client.post("/api/v1/reconstruct/jobs", json={"projectId": "project"})
+        assert reply.status_code == 201
+        job_id = reply.json()["jobId"]
+    directory = tmp_path / job_id
+    directory.mkdir()
+    partial = directory / "input-partial.image"
+    partial.write_bytes(b"partial upload")
+    record = store.get(job_id)
+    record["updated_at"] = time.time() - settings.UPLOAD_TTL_SECONDS - 1
+    store.db.execute("UPDATE jobs SET payload = ? WHERE id = ?", (json.dumps(record), job_id))
+    store.db.commit()
+    store.db.close()
+
+    reopened = JobStore(tmp_path)
+    monkeypatch.setattr(routes, "store", reopened)
+    with TestClient(app, headers=headers) as client:
+        assert client.get(f"/api/v1/reconstruct/jobs/{job_id}").json()["status"] == "FAILED"
+        assert client.post("/api/v1/reconstruct/jobs", json={"projectId": "retry"}).status_code == 201
+        assert not partial.exists()
+    reopened.db.close()
+
+
 def test_backup_restore_and_retention_leave_active_and_recent_jobs(tmp_path):
     root = tmp_path / "data"; root.mkdir()
     store = JobStore(root)
