@@ -73,11 +73,50 @@ Android supports uncompressed GLB scene transforms, triangle lists/strips/fans, 
 
 Install PrusaSlicer 2.9.2+ and set `XR3D_SLICER_EXECUTABLE` to its CLI executable. Windows requires `prusa-slicer-console.exe`. Set `XR3D_SLICER_PROFILE` to the exported, calibrated `.ini` configuration for the intended printer. Missing profiles fail explicitly. The `/api/v1/slicer/slice` endpoint validates the actual STL and printer volume, then invokes PrusaSlicer with the profile and selected settings. Triangle infill and Normal/Organic support styles are explicit; unsupported Tree settings fail instead of being substituted. No bounding-box toolpaths are generated.
 
-Resin and SLM require machine-specific slicers and are unavailable in this build. Verify printer profiles and generated toolpaths on the intended printer; defaults cannot replace a calibrated machine profile. See <https://github.com/prusa3d/PrusaSlicer/wiki/Command-Line-Interface>.
+Verify printer profiles and generated toolpaths on the intended FDM printer. [PrusaSlicer CLI documentation](https://github.com/prusa3d/PrusaSlicer/wiki/Command-Line-Interface)
+
+## Optional SLM preparation with PySLM
+
+Install the supplied PySLM source in a separate Python 3.12 environment. The commands assume the PySLM folder is present under `external/`.
+
+```powershell
+py -3.12 -m venv .venv-slm
+.\.venv-slm\Scripts\python.exe -m pip install .\external\pyslm-master
+```
+
+```bash
+python3.12 -m venv .venv-slm
+.venv-slm/bin/python -m pip install ./external/pyslm-master
+```
+
+Set `XR3D_SLM_PYTHON` in `.env` to use a different Python executable. The standard Docker image requires a separate PySLM install to enable this feature. PySLM is distributed under the LGPL 2.1 license included with the supplied source. [PySLM documentation](https://pyslm.readthedocs.io/en/latest/)
+
+- `GET /api/v1/slm` checks the optional runtime.
+- `POST /api/v1/slm/preview` accepts multipart `model` (a closed STL in millimetres) and `config` (JSON). Both endpoints use the XR3D server token. Try them in `/api/v1/docs`.
+- The response is `xr3d-slm-preview.zip`. `manifest.json` records the engine version, settings, XYZ limits, source-to-preview translation, layer count, and total contour and hatch length. `layers.jsonl` has one JSON object per layer, including the slicing plane at `zMm`, layer thickness, and ordered `paths`. Each `contour` stores a connected XY polyline. Each `hatch` stores consecutive pairs of XY points, with a separate line segment for each pair. Coordinates are in millimetres, with the bottom of the model aligned to Z = 0.
+- Preview requests are limited to 24 MiB, 250,000 triangles, 2,000 layers, and 500,000 scan segments. Additional limits on model dimensions, combined complexity, and runtime keep large previews bounded. One preview runs at a time.
+
+For a small geometry test, paste this into the `config` field.
+
+```json
+{"layerThicknessMm":0.5,"hatchSpacingMm":0.4,"strategy":"stripe","hatchAngleDeg":5,"layerRotationDeg":67}
+```
+
+`strategy` accepts `parallel`, `stripe`, or `island`. Hatch spacing and thickness are geometry inputs for preview. In Android, open a model and select **Advanced Slicer → SLM Layer Preview** to generate or import the ZIP. Automatic metal supports, material profiles, and machine-specific output require separate integration.
+
+## Resin layer previews
+
+Resin layer previews use the same isolated PySLM environment as SLM. `GET /api/v1/resin` checks whether the runtime is configured. `POST /api/v1/resin/preview` accepts multipart `model` (closed STL in millimetres) and `config` (JSON). Both require the XR3D server token. For a small preview test, use this configuration in `/api/v1/docs`.
+
+```json
+{"layerThicknessMm":0.1,"pixelSizeMm":0.1,"buildVolumeMm":[120,68,150],"rotationDeg":[0,0]}
+```
+
+The backend applies X and Y tilt, aligns the lowest point with Z = 0, and checks the part’s dimensions against the supplied build volume. The preview ZIP contains `manifest.json` and one binary PNG per layer. The masks share a fixed XY grid cropped to the oriented model. Per-layer exposed area is computed from the number of white pixels. Estimated cured volume integrates that area over layer thickness and describes the model geometry. The preview omits supports, resin use outside the model, exposure timing, and printer-specific export. SLM and resin share one preview slot.
 
 ## API and deployment
 
-Interactive docs: `/api/v1/docs`; health: `/health`. All model, provider, and slicer endpoints require `Authorization: Bearer XR3D_API_TOKEN`. This is a **single-owner private studio server**, not a multi-tenant service. Use separate instances/tokens per owner; per-user accounts, quotas, billing and tenant isolation are not implemented.
+Open the XR3D API Explorer at `/api/v1/docs` or the API Reference at `/redoc`. In the API Explorer, choose **Authorize** and enter the server token to test protected endpoints. The health endpoint is `/health`. All model, provider, and slicer endpoints require `Authorization: Bearer XR3D_API_TOKEN`. This is a **single-owner private studio server**, not a multi-tenant service. Use separate instances/tokens per owner; per-user accounts, quotas, billing and tenant isolation are not implemented.
 
 ### Strecs3D FEM
 
@@ -85,7 +124,11 @@ Install `backend/requirements.fem.txt` in the backend Python environment. Instal
 
 - `GET /api/v1/fem` reports whether the optional runtime is configured.
 - `POST /api/v1/fem/solve` accepts multipart `model` (one closed STL or STEP solid up to 24 MB) and `config` (JSON). It returns `xr3d-fem.vtu` and summary headers for peak nodal von Mises stress in MPa, maximum displacement in mm, and mesh counts.
+- Android sends the optional multipart field `output_format=mobile` to get a ZIP with the full VTU and a compact exterior mesh. The exterior uses the same solve's nodal von Mises stress in MPa and displacement magnitude in mm. Requests without this field receive the VTU directly.
 - XYZ coordinates and element size are in millimetres. `forceN` is the total XYZ force in newtons, distributed over the selected triangles. A coordinate box must contain all three corners of each selected triangle. Give flat faces a small tolerance. STEP requests can also select a Gmsh surface tag with `{"faceId": 1}`. Each fixed region constrains all three translations.
+- `meshMode` defaults to `adaptive`, which starts with local sizing near curvature, sampled thin STL regions, and fixed and loaded faces. CalculiX supplies integration-point stresses for a stress-recovery error estimate. The backend performs up to three solves and checks for at most 7.5% estimated relative energy error and 2% change in load work between passes. `automatic` runs the initial locally sized mesh only. `uniform` requests a single global size. The backend returns the last valid solve if later refinement exceeds the job budget or changes the selected boundary regions substantially. On repaired meshes, each refined surface triangle inherits the original support and load selection from its parent.
+- For closed STL models, the worker checks for overlapping triangles and tries CGAL surface repair before Gmsh meshing. fTetWild is a fallback when Gmsh cannot build a valid volume mesh. The default repair tolerance is the smallest of 1 mm, 0.05% of the bounding box diagonal, and 5% of the requested size. `repairToleranceMm` overrides it. Repairs can simplify dense triangulations and are checked against the original for topology, volume change, and sampled surface deviation in both directions. Subsequent refinement bisects shared tetrahedral edges while preserving the accepted repaired surface. Open and disconnected models are rejected. Use the original STEP for parts with critical tolerances when it is available.
+- The `X-XR3D-FEM-Mesh-Status`, `X-XR3D-FEM-Mesh-Passes`, and `X-XR3D-FEM-Mesh-History` response headers report the refinement outcome and the error and load work for each completed pass when available. `X-XR3D-FEM-Surface-Deviation-Mm` reports the sampled deviation when the STL fallback was used. The mobile ZIP contains the full VTU and a heatmap preview capped at 12,000 triangles. The preview cap does not reduce the solver resolution.
 
 ```json
 {

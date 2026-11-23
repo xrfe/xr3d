@@ -1,2 +1,6 @@
 # Gmsh's Python package includes the native meshing library. Install CalculiX separately.
 gmsh==4.15.2
+rtree>=1.4,<2
+scipy>=1.13,<2
+libigl==2.6.3
+pytetwild[all]==0.4.2
