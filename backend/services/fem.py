@@ -3,6 +3,7 @@ import os
 from importlib.util import find_spec
 from pathlib import Path
 from shutil import which
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -43,10 +44,16 @@ class SurfaceLoad(FemOptionsModel):
 
 class FemOptions(FemOptionsModel):
     elementSizeMm: float = Field(ge=0.05, le=500)
+    meshMode: Literal["uniform", "automatic", "adaptive"] = "adaptive"
+    repairToleranceMm: float | None = Field(default=None, gt=0, le=25)
     youngsModulusMpa: float = Field(gt=0, le=1e7)
     poissonsRatio: float = Field(gt=-1, lt=0.5)
     fixed: list[Face | SurfaceBox] = Field(min_length=1, max_length=16)
     loads: list[SurfaceLoad] = Field(min_length=1, max_length=16)
+
+
+class InvalidModel(ValueError):
+    pass
 
 
 def solver_executable() -> str | None:
@@ -54,5 +61,5 @@ def solver_executable() -> str | None:
     return str(Path(executable).resolve()) if executable else None
 
 
-def gmsh_installed() -> bool:
-    return find_spec("gmsh") is not None
+def fem_dependencies_available() -> bool:
+    return all(find_spec(package) is not None for package in ("gmsh", "igl", "rtree", "scipy", "fast_simplification"))
