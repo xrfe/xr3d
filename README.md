@@ -1,142 +1,170 @@
-# XR3D / AI 3D Studio
+# XR3D Studio
 
-XR3D is an Android app for creating and preparing 3D models from photographs. Use a personal Meshy API key to generate models online directly from your phone, or connect the app to a private XR3D server for self-hosted or hosted inference. You can inspect the result, adjust its dimensions, export it, and prepare it for 3D printing.
+XR3D is a mobile-first Android app for capturing, inspecting, and preparing 3D models for printing. Import an existing model or reconstruct one from photos, check its fit in the camera view, then slice and send it to a supported printer. An optional private backend adds AI runtimes, printer fallbacks, server-side slicing, model checks, and structural analysis.
+
+**Version 1.1.0** (build 10) runs on Android 10 or later. Lite includes ads and Pro is ad-free. The editions install under separate application IDs.
 
 ## Features
 
-- **Image to 3D:** capture or import a photo for Meshy Single Image or TRELLIS.2; Meshy Multi Image accepts 2–4 views of the same object.
-- **Online or local AI:** use Meshy directly from Android, a server-managed Meshy key, hosted TRELLIS.2 through fal, or a separately installed local TRELLIS.2 GPU runtime.
-- **Model library and viewer:** save projects, reopen generated models, inspect geometry, calibrate dimensions, simplify or repair meshes, and run printability checks.
-- **Export and printing:** export STL for an external slicer, or use an optional server-side FDM slicer with a calibrated profile. Printer Hub supports OctoPrint, Moonraker, PrusaLink, and server-bridged Bambu LAN and FLASHFORGE Adventurer 5M/5M Pro connections.
-- **Demonstrations:** procedural demo models and FEM demo results are demonstrations, not AI reconstructions or validated engineering analysis.
+| Area | What you can do |
+| --- | --- |
+| Capture and scan guidance | Take photos with CameraX or import them from the gallery. In multi-view mode, select a target angle, see completed and missing views, and label older or imported photos. Angle assignments stay with their photos when you reopen a project. |
+| Image-to-3D | Generate from one photo with Meshy Single Image or 2–4 views with Meshy Multi Image. Use a personal Meshy key directly on Android, or use the backend for a shared Meshy key, hosted or local TRELLIS.2, configured Hunyuan3D, or a compatible Custom REST service. The offline mock engine generates demo models. |
+| Model workspace | Browse and reopen projects, import OBJ, binary or ASCII STL, ASCII PLY, and supported uncompressed GLB/glTF geometry. Inspect meshes at saved dimensions with camera presets, shading modes, a grid, and a bounding box. |
+| Geometry and export | Inspect mesh health and printability, apply basic repair, simplify or smooth a mesh, calibrate dimensions and units, and export or share binary or ASCII STL. |
+| Phone AR | Place a model on a tracked table or floor at its saved scale on an ARCore-compatible phone. Pan in 10 mm steps, rotate in 30° steps, tilt in 15° steps, reset placement, and show an adjustable clearance envelope. |
+| FDM slicing | Slice offline on Android with the bundled OrcaPhone core for the FLASHFORGE Adventurer 5M series with its stock 0.4 mm nozzle. Advanced Slicer shows the toolpath and print estimates. A calibrated PrusaSlicer backend covers other supported FDM workflows. |
+| Printer Hub | Scan the LAN or add a printer manually. Connect directly to FLASHFORGE Adventurer 5M/5M Pro, OctoPrint, Moonraker, and PrusaLink. Use the private server for eligible connection fallbacks, Duet, and Bambu LAN. Upload compatible files, confirm a print start, and use the status and job controls supported by the selected printer. |
+| Flashforge Print Monitor | Follow reported print phase, layer progress, elapsed and remaining time, nozzle and bed temperatures, and up to 30 minutes of temperature history. The monitor also shows a job thumbnail when the firmware supplies one. |
+| Backend services | Run authenticated reconstruction jobs with status, cancellation, and recovery. The server validates model downloads and supports GLB, OBJ, STL, and ASCII PLY output. It also provides server-side FDM slicing, LAN discovery, advanced STL checks, and printer fallbacks. The local XR3D Studio MCP service exposes printer discovery, STL inspection, and printer status. |
+| Structural analysis | Submit a closed STL or STEP solid to the backend's Strecs3D-based Gmsh and CalculiX pipeline and download stress, strain, and displacement as VTU. Android's **FEM Demo** provides illustrative results in mock mode. |
 
-AI-generated geometry may need repair and dimensional adjustment before printing. The viewer uses geometry shading rather than a full textured PBR preview. A successful printability check does not guarantee a successful print.
+### Which setup do I need?
 
-## Which setup do I need?
+| Workflow | Setup |
+| --- | --- |
+| Import, edit, share, or preview a model in AR | Android app. AR also requires a supported phone, Google Play Services for AR, and camera permission. |
+| Meshy with **My Meshy key** | Android app, internet, a personal Meshy API key, and credits. |
+| Meshy with **Server key**, TRELLIS.2, Hunyuan3D, or Custom REST | Private server with the selected provider configured. Hosted providers require internet and credentials. Local TRELLIS.2 requires its own CUDA environment and weights. |
+| Offline Flashforge slicing and direct LAN printing | Android app and the intended printer on the same LAN. On-device slicing targets the Adventurer 5M series with its stock 0.4 mm nozzle. |
+| Direct OctoPrint, Moonraker, or PrusaLink | Android app and the reachable printer or printer host. Use a suitable pre-sliced file or set up server slicing. |
+| Printer fallback, Duet, Bambu LAN, or MCP | Private server. Install the XR3D Print Engine for discovery, model checks, Duet, and its supported fallbacks. Bambu LAN also requires a trusted printer certificate. |
+| Server-side slicing or FEM | Private server with the relevant optional runtime installed. |
 
-| Task | XR3D server required? | Other requirements |
-| --- | --- | --- |
-| Meshy with **My Meshy key** | No | Internet, personal Meshy API key and credits |
-| Meshy with **Server key** | Yes | Server configured with a Meshy key and internet |
-| Local TRELLIS.2 | Yes | Separate compatible GPU environment, model dependencies and weights |
-| Hosted TRELLIS.2 | Yes | fal account, API key, credits and internet |
-| View, adjust and export a downloaded model | No | Model already available in the app |
-| In-app FDM slicing | Yes | PrusaSlicer and a calibrated printer profile on the server |
-| FLASHFORGE 5M or Bambu LAN via Printer Hub | Yes | Server and printer reachable on a trusted network; printer-specific setup |
-
-**XR3D server** is the optional Python application in this repository that runs on your computer or another machine. It connects Android to configured AI runtimes, performs server-side slicing, and bridges certain printer protocols. It is separate from the Android app. The supported release model is a private, single-owner server, not a public multi-user service.
-
-## Get the Android app
+## Install the Android app
 
 Download it from android play store:
 ## 🖨️ [XR3D: 3D Printing Any Images](https://play.google.com/store/apps/details?id=com.feaxr.xr3d)
+## Use the phone workflows
 
-## Generate online with Meshy — no server
+### Capture and reconstruct with Meshy
 
-1. Obtain a personal API key and available API credits from [Meshy](https://www.meshy.ai/). Generation requires internet and may incur charges.
-2. Open XR3D **Settings**. Choose **Meshy Single Image** for one photo or **Meshy Multi Image** for 2–4 views.
-3. Choose **My Meshy key** and enter your key in the separate Meshy key field. A server URL and server token are not needed for this workflow.
-4. Capture or import your images. For multiple views, use photos of the same object and put the front view first. Use clear, well-lit images with the object visible.
-5. Start reconstruction and wait for the result to download into the project. Open it in the viewer, inspect it, and calibrate its dimensions. Export STL when you are ready to use a slicer.
+1. In **Settings**, choose **Meshy Single Image** for one photo or **Meshy Multi Image** for 2–4 photos of the same object.
+2. Select **My Meshy key** and enter a personal API key, or select **Server key** after configuring the backend with `MESHY_API_KEY`.
+3. In multi-view capture, open **Scan angles**, choose the angle you plan to shoot, then take the photo. Tap a gallery or older photo's thumbnail to set its angle manually. Use a front view first for Meshy.
+4. Tap **Reconstruct**, choose the provider settings, and generate the model. Open the result, inspect its geometry, and calibrate a known dimension before printing.
 
-New personal-key jobs communicate directly with Meshy over HTTPS. The key is kept in Android Keystore-backed preferences and excluded from backup; clear the key field to remove it. Direct generation downloads a GLB; STL export is available in the viewer. The exact shape and physical dimensions are not guaranteed by a photograph.
+A personal Meshy key is stored in Android Keystore-backed preferences. Paid generation requires internet and credits. Stopping tracking can leave the provider task running, so check task history before retrying an uncertain submission. [Meshy setup, formats, and recovery](docs/meshy.md)
 
-Stopping a job stops XR3D tracking; Meshy processing and charges may continue. If submission has an uncertain outcome, check your Meshy task history before retrying, since a retry can create another paid job. See [Meshy setup and limitations](docs/meshy.md) for recovery, quality settings, and supported formats.
+### Preview a part in AR
 
-## Set up the private XR3D server
+Open a saved model and tap **View in AR**. Complete the AR setup, allow camera access, and move the phone until it finds a table or floor. Tap that surface to place the model, then use **Pan**, **Tilt**, **Rotate**, or **Reset**. The AR preview supports meshes up to 400,000 triangles.
 
-The following example starts the server on Windows from the project root. Python and access to the package dependencies are required.
+Turn on **Fit guides** to see cyan part bounds and an amber clearance envelope. Tap **Edit** beside the clearance value to set the margin from 0 to 250 mm. The margin extends around the sides and above the part. The envelope updates when you tilt the part and provides a visual estimate of fit.
+
+### Slice, print, and monitor
+
+1. Open **Printer Hub** from **Connect Printer** and use **Scan LAN** or add the printer manually. Allow local network access if Android asks. Verify that the profile matches the printer, nozzle, material, and build volume.
+2. In the viewer, inspect and calibrate the model. Use **Advanced Slicer** for supported FDM profiles, or export STL and slice it in your printer's slicer.
+3. Review the toolpath. Choose **Send to Printer** or upload an existing file through **Print G-code** or **Print sliced 3MF**, as appropriate. Verify the destination and confirm the start.
+4. For Flashforge, open the printer's **Print Monitor** to follow progress, temperatures, and the thumbnail when supplied.
+
+| Printer | Connection and file setup |
+| --- | --- |
+| FLASHFORGE Adventurer 5M / 5M Pro | Enable **LAN Only** and enter the IPv4 address, serial number, and LAN check code. The direct connection and optional server fallback use TCP 8898. Print plain `.gcode` generated for the intended machine. |
+| OctoPrint, Moonraker/Klipper, PrusaLink | Connect to the local host with its credentials. The app prefers the direct route. The XR3D Print Engine can provide a fallback using a private IPv4 target. |
+| Duet | Add it manually in Printer Hub with the LAN address and board password if configured. The XR3D server runs the adapter. |
+| Bambu LAN | Enable LAN Only and any firmware-required Developer Mode. Configure the private server with the verified printer certificate. Upload an externally sliced, single-plate, single-filament `.gcode.3mf` for the intended model and external spool. |
+
+Use **Express Print** for a supported saved model and printer after confirming the loaded material. Use **Advanced Slicer** when you want to inspect the toolpath first. If a start request times out, check the printer before trying again. [Printer setup, monitoring, and certificate pairing](docs/printer-adapters.md)
+
+## Install the private backend
+
+Use Python **3.12** with `venv` support, the version used by the backend image. Run these commands from the project root. The examples preserve an existing `.env`.
+
+### Windows
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
-Copy-Item .env.example .env
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements.lock.txt
+.\.venv\Scripts\python.exe -m backend.install_print_engine
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 .\.venv\Scripts\python.exe -m backend.serve
 ```
 
-The launcher generates an `XR3D_API_TOKEN` in `.env` if one is not set. Keep `.env` private and enter this token in Android **Settings → XR3D server access token**. The server token is different from your Meshy or fal API key.
+### Linux
 
-Set the server reconstruction endpoint in Android Settings:
-
-- **Android emulator on the server computer:** `http://10.0.2.2:8000/api/v1/reconstruct`.
-- **Physical phone on a trusted LAN:** `http://YOUR_COMPUTER_LAN_IP:8000/api/v1/reconstruct`. Start the server with `python -m backend.serve --host 0.0.0.0` using the virtual environment Python, and allow port 8000 through the computer's firewall if needed. The phone must be able to reach that address.
-- **Remote server:** use `https://YOUR_HOST/api/v1/reconstruct` behind a TLS reverse proxy. Public HTTP inference URLs are rejected by Android.
-
-Opening `http://SERVER_ADDRESS:8000/health` checks basic server availability. API documentation is at `/api/v1/docs`. The authenticated `/ready` endpoint reports configuration, but does not prove that a live AI provider or GPU is working. Run one server worker, keep its data directory persistent, and use it only as a private single-owner service. See [server setup and operations](backend/README.md) and [release operations](docs/release-readiness.md).
-
-### Meshy using the server's key
-
-This option is useful if the server owner supplies the key instead of entering a personal key on the phone.
-
-1. Set `MESHY_API_KEY` in the server's `.env`, then start or restart the server. `MESHY_MODEL` can be configured there as well.
-2. Configure the server endpoint and XR3D server token in Android Settings.
-3. Select **Meshy Single Image** or **Meshy Multi Image**, then select **Server key**.
-4. Capture/import the required images and start reconstruction. The server submits the request to Meshy, downloads and validates the result, and sends it to the app.
-
-Meshy credits and internet access are still required. The server key and XR3D access token serve different purposes; do not enter one in place of the other.
-
-### Hosted TRELLIS.2 with fal
-
-1. Create a fal account with access and credits for TRELLIS.2. Set `FAL_KEY` in the server's `.env`; the default model is `fal-ai/trellis-2`.
-2. Start or restart the server, configure its endpoint and token in Android, and select **TRELLIS.2** in Settings.
-3. Choose **Single View**, capture or import one image, and start reconstruction. The server sends it to fal and retrieves the generated model.
-
-The fal key stays on the server. Hosted jobs require internet and may incur provider charges. See [fal's TRELLIS.2 API](https://fal.ai/models/fal-ai/trellis-2/api).
-
-### Local TRELLIS.2 on your own computer
-
-Local inference runs on the **server computer**, not on the Android phone. Install the [official TRELLIS.2 runtime](https://github.com/microsoft/TRELLIS.2), dependencies, CUDA environment, and model weights separately. A supported NVIDIA GPU is normally needed; Linux or WSL is the usual environment. Requirements depend on the upstream model and chosen setup.
-
-In the server's `.env`, configure the upstream environment's Python and XR3D worker with absolute paths valid in the environment where the server runs. This example uses Linux/WSL paths:
-
-```dotenv
-XR3D_LOCAL_COMMAND=["/absolute/path/to/trellis-env/bin/python", "/absolute/path/to/xr3d/backend/workers/trellis2.py"]
-XR3D_LOCAL_PROVIDER=TRELLIS_2
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.lock.txt
+.venv/bin/python -m backend.install_print_engine
+test -e .env || cp .env.example .env
+.venv/bin/python -m backend.serve
 ```
 
-Start the XR3D server where it can access that runtime and the same filesystem as the worker. Configure the server endpoint and token on Android, select **TRELLIS.2**, and use **Single View** with one image. The bundled adapter does not support multi-view TRELLIS.2 input or text prompts. Worker logs are kept under `backend-data/JOB_ID/worker.log` by default. Local GPU execution still needs validation in your own CUDA environment. See [backend setup](backend/README.md) for the worker contract and configuration.
+The launcher generates `XR3D_API_TOKEN` in `.env` if needed. Keep that file private. In Android **Settings**, set **XR3D server access token** to this token and **XR3D server URL** to the reconstruction endpoint below. Provider keys stay separate from the XR3D access token.
 
-### Other AI providers
+| Client | XR3D server URL |
+| --- | --- |
+| Android emulator on the server computer | `http://10.0.2.2:8000/api/v1/reconstruct` |
+| Physical phone on the same trusted LAN | `http://SERVER_LAN_IP:8000/api/v1/reconstruct`. Start with `--host 0.0.0.0` and allow the chosen port through the local firewall. |
+| Remote client | `https://YOUR_HOST/api/v1/reconstruct` behind a TLS reverse proxy. |
 
-Hunyuan3D requires a separately configured compatible local worker or fal endpoint; no Hunyuan worker is bundled. Custom REST requires a compatible XR3D server. Tripo and Pixal entries are present in the interface, but the bundled server does not provide configured adapters for them. See [backend setup](backend/README.md) before choosing these options.
+Use `/health` for basic liveness and `/api/v1/docs` for the interactive API. The authenticated `/ready` endpoint reports inference and slicing configuration. Run one backend worker for one trusted owner and keep `XR3D_DATA_DIR` persistent. [Backend setup, operations, and recovery](backend/README.md)
 
-## Prepare a model for 3D printing
+### Docker
 
-1. Open the downloaded model in the viewer and inspect its shape. Use the available repair and simplification tools if necessary.
-2. Set or calibrate its dimensions. Image-to-3D output does not determine reliable real-world size.
-3. Export STL and open it in a slicer with the exact printer, nozzle, filament, and firmware profile. Set orientation, layer height, supports, and other settings as needed, then inspect the generated toolpaths.
-4. Send the sliced file using your slicer or a supported Printer Hub connection. You can also transfer the file using your printer's normal workflow.
+Copy `.env.example` to `.env` if needed and set a private `XR3D_API_TOKEN` before starting the container. The container runs Uvicorn directly. This example publishes the server on the host's loopback interface. For a trusted LAN, publish on the host's LAN address and restrict access to that network.
 
-Alternatively, XR3D can request **server-side FDM slicing**: install PrusaSlicer 2.9.2 or newer on the server and set `XR3D_SLICER_EXECUTABLE` and `XR3D_SLICER_PROFILE` in `.env`. On Windows use `prusa-slicer-console.exe`. The `.ini` must be a calibrated profile for the actual printer and filament; a generic profile is not enough. Resin and SLM slicing are unavailable. See [server slicing setup](backend/README.md#optional-real-fdm-slicing).
+```bash
+docker build -f backend/Dockerfile -t xr3d .
+docker run --rm --env-file .env -e XR3D_DATA_DIR=/data -p 127.0.0.1:8000:8000 --mount type=volume,source=xr3d-data,target=/data xr3d
+```
 
-## Connect a printer
+The image includes the API and XR3D Print Engine. Add the optional FEM or PrusaSlicer dependencies to the runtime on which you want to use them. Local AI inference also needs its own model runtime, CUDA setup, and weights.
 
-Printer Hub includes connections for OctoPrint, Moonraker and PrusaLink, as well as Bambu LAN and FLASHFORGE 5M through the private XR3D server. Compatibility depends on the printer, firmware, and service configuration; the brand name alone does not guarantee compatibility. Automatic discovery is not included for the Bambu and FLASHFORGE adapters.
+### Optional backend capabilities
 
-### FLASHFORGE Adventurer 5M / 5M Pro
+- **AI providers** — Set `MESHY_API_KEY` for shared Meshy access or `FAL_KEY` for hosted TRELLIS.2. For local TRELLIS.2, install the upstream GPU runtime and set `XR3D_LOCAL_COMMAND` to the worker command as a JSON argument list. Hunyuan3D requires a compatible local worker or a configured fal endpoint. [Provider configuration and worker contract](backend/README.md#choose-an-inference-runtime)
+- **Printer fallback, STL checks, and MCP** — The installer creates a separate `.venv-print` for the Kiln-based XR3D Print Engine. Check it at `GET /api/v1/print-engine`. With the backend running, configure a local MCP client to launch the backend's Python with `-m backend.studio_mcp` from the project root. This exposes `discover_printers`, `inspect_stl`, and `printer_status`. [Print Engine and MCP setup](backend/README.md#server-model-checks-and-mcp)
+- **Server-side FDM slicing** — Install PrusaSlicer 2.9.2 or later, export the intended printer's calibrated `.ini` profile, and set `XR3D_SLICER_EXECUTABLE` and `XR3D_SLICER_PROFILE` in `.env`. Use `prusa-slicer-console.exe` on Windows or `prusa-slicer` on Linux. [Server slicing setup](backend/README.md#optional-real-fdm-slicing)
 
-1. Connect the printer to a trusted network, enable **LAN Only**, and find its IP address, serial number and LAN check/access code.
-2. Run the XR3D server on a computer that can reach the printer, and configure its URL and server token in Android Settings. The FLASHFORGE bridge uses TCP port 8898.
-3. In **Printer Hub → + → FLASHFORGE 5M**, enter the printer's IP, serial and check code, save the profile, and connect. Check whether actual status and temperatures appear.
-4. Slice a small model for your exact printer and filament using a compatible slicer. In Printer Controls choose **Print G-code** and select the resulting `.gcode` file. The user-initiated action uploads the file and then requests a print start.
+### Enable Strecs3D FEM
 
-The adapter has protocol tests, but has **not been verified on a physical Adventurer 5M**. Verify the connection and supervise a small known-good print before relying on it. XR3D currently connects through the server, not directly from Android to this printer. See [FLASHFORGE setup and troubleshooting](docs/printer-adapters.md#set-up-your-adventurer-5m).
+On Windows, install the CalculiX solver and set `XR3D_CCX_EXECUTABLE` in `.env` to its executable path. The Windows verification used `ccx_i4_static.exe`. [CalculiX downloads](https://www.dhondt.de/)
 
-### Bambu LAN
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements.fem.txt
+```
 
-Enable LAN Only and any firmware-required Developer Mode, then configure the printer's IP, serial and LAN access code. The server must trust the verified printer certificate; follow the pairing steps in [Bambu LAN setup](docs/printer-adapters.md#set-up-bambu-lan). Slice externally using the correct printer profile and upload a **single-plate, single-filament `.gcode.3mf`** via Printer Hub. Generic in-app PrusaSlicer output is not used for Bambu. The adapter has not been verified on physical Bambu hardware, and firmware/model support varies.
+On Debian-based Linux, install the solver and the system GLU library, then install Gmsh into the backend virtual environment. The backend finds `ccx` on `PATH` when `XR3D_CCX_EXECUTABLE` is unset.
 
-## Troubleshooting
+```bash
+sudo apt install calculix-ccx libglu1-mesa
+.venv/bin/python -m pip install -r backend/requirements.fem.txt
+```
 
-- **Meshy fails:** check internet, key source, API key, credits and the required image count. Check task history before retrying an uncertain submission.
-- **Phone cannot reach server:** check the endpoint, token, server process, LAN address and firewall. `10.0.2.2` is for the Android emulator, not a physical phone.
-- **Local inference fails:** check GPU/CUDA compatibility, upstream installation, weights, absolute worker paths and the job's worker log. A running API alone does not mean the model is installed.
-- **Slicing fails:** install PrusaSlicer and configure its executable and a calibrated profile for the exact printer. A model file is not already a print-ready toolpath.
-- **Printer does not connect or start:** check network reachability, printer mode, credentials, firmware and the supported file type. If a start request times out, inspect the printer before retrying: it may have received the command.
-- **Model looks wrong or is not printable:** inspect, repair, calibrate, and review it in a slicer. Generated models can contain defects, and some compressed or unsupported GLB geometry is rejected.
+Restart the backend and check the authenticated `GET /api/v1/fem`. Submit the solid and load settings to `POST /api/v1/fem/solve` for the VTU download. [Request format and cantilever example](backend/README.md#strecs3d-fem)
 
-## Current limitations and verification
+## Scope and verification
 
-Live Meshy generation, local CUDA inference, and physical FLASHFORGE/Bambu printing have not been verified in this development session. Validate each with your own accounts, hardware and profiles. Direct Meshy generation has automated tests; those do not establish model quality or successful real-world printing. Unsupported inference and slicing configurations report errors rather than silently producing sample geometry.
+- **Android and AR** — The viewer renders geometry shading. AR placement, controls, and fit guides were tested on an LG V35. The emulator verified that scan angles survive an app restart and that saved photos reach the reconstruction screen.
+- **Geometry and AI** — Inspect reconstructed geometry and calibrate its scale before printing. The current importer supports uncompressed geometry with compatible glTF data. Tripo, Pixal, compressed glTF geometry, and machine-specific resin and metal slicing are outside the available workflows. Live Meshy generation and local CUDA inference still need acceptance testing.
+- **Printing** — An Adventurer 5M with a stock 0.4 mm nozzle completed a 10-layer PLA test using G-code sliced offline on Android and sent through the backend bridge. Direct LAN paths have protocol coverage. Physical direct-route printing, 5M Pro, Bambu LAN, and Duet still need hardware print validation.
+- **Structural analysis** — The backend solves static loads on one solid with isotropic linear elastic properties. STEP and STL benchmarks and an HTTP solve of the bundled Strecs3D cantilever ran with real Gmsh and CalculiX on Windows. Linux FEM still needs an end-to-end solve. Directional printed material properties, stress-based region segmentation, variable-density infill, and Strecs3D's slicer-specific 3MF export are outside the current FEM integration.
 
-Further details: [Meshy](docs/meshy.md), [printer adapters](docs/printer-adapters.md), [backend](backend/README.md), [implementation status](docs/implementation-status.md), and [release readiness](docs/release-readiness.md).
+### Run the checks
+
+Run these Gradle checks from the project root. On Linux or macOS, use `./gradlew` as the wrapper.
+
+```powershell
+.\gradlew.bat :app:testLiteDebugUnitTest :app:testProDebugUnitTest :app:lintLiteRelease
+```
+
+Install `pytest` in the backend virtual environment, then run `python -m pytest backend/tests -q -p no:cacheprovider` with that environment's Python. Configure Gmsh and CalculiX to include the native FEM tests. [Verification history](docs/verification.md) · [Release acceptance checklist](docs/release-readiness.md)
+
+### Troubleshooting
+
+- **Phone cannot reach the backend** — Check the URL, token, server bind address, and firewall. Use the server's LAN IP on a physical phone and `10.0.2.2` on the local Android emulator.
+- **Meshy fails** — Check the key source, credits, internet access, and image count. If submission status is uncertain, check the provider's task history before retrying.
+- **AR cannot start** — Check ARCore compatibility, Google Play Services for AR, and camera permission. Move slowly over a well-lit table or floor to find a placement surface.
+- **Slicing or printing fails** — Confirm the mesh is closed and fits the print volume, the selected profile matches the loaded material and hardware, and the printer is reachable in its supported LAN mode.
+- **FEM solve is unavailable** — Check the backend's active Python environment, Gmsh native dependencies, and CalculiX path. If the model or a region is rejected, verify it is one closed solid and the fixed and load regions cover actual exterior faces.
+
+## Project components and notices
+
+- [Android app](app/) and [architecture](docs/architecture.md)
+- [XR3D backend](backend/README.md) and [API documentation notes](backend/README.md#api-and-deployment)
+- [Bundled OrcaPhone slicer core and license](external/orcaphone/README.md)
+- [Kiln-based XR3D Print Engine source and notices](backend/PRINT-ENGINE-NOTICE.md)
+- [Strecs3D license](backend/STRECS3D-LICENSE)
