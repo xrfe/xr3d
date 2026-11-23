@@ -11,6 +11,7 @@ from backend.routes.providers import router as providers_router
 from backend.routes.slicer import router as slicer_router
 from backend.routes.printers import router as printer_router
 from backend.routes.print_engine import router as print_engine_router
+from backend.routes.fem import router as fem_router
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 app = FastAPI(title=settings.APP_NAME, version=settings.VERSION, lifespan=lifespan,
@@ -23,6 +24,7 @@ app.include_router(providers_router, prefix=settings.API_PREFIX)
 app.include_router(slicer_router, prefix=settings.API_PREFIX)
 app.include_router(printer_router, prefix=settings.API_PREFIX)
 app.include_router(print_engine_router, prefix=settings.API_PREFIX)
+app.include_router(fem_router, prefix=settings.API_PREFIX)
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request, error):

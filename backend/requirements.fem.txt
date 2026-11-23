@@ -1,0 +1,2 @@
+# Gmsh's Python package includes the native meshing library. Install CalculiX separately.
+gmsh==4.15.2

@@ -79,6 +79,31 @@ Resin and SLM require machine-specific slicers and are unavailable in this build
 
 Interactive docs: `/api/v1/docs`; health: `/health`. All model, provider, and slicer endpoints require `Authorization: Bearer XR3D_API_TOKEN`. This is a **single-owner private studio server**, not a multi-tenant service. Use separate instances/tokens per owner; per-user accounts, quotas, billing and tenant isolation are not implemented.
 
+### Strecs3D FEM
+
+Install `backend/requirements.fem.txt` in the backend Python environment. Install [CalculiX CrunchiX](https://www.dhondt.de/) and set `XR3D_CCX_EXECUTABLE` in `.env` to the path to its solver executable, or put `ccx` on the server's PATH. On a minimal Linux host the Gmsh wheel also needs the system GLU library (for Debian, `libglu1-mesa`). Use the Windows `ccx_i4_static.exe` on a Windows server.
+
+- `GET /api/v1/fem` reports whether the optional runtime is configured.
+- `POST /api/v1/fem/solve` accepts multipart `model` (one closed STL or STEP solid up to 24 MB) and `config` (JSON). It returns `xr3d-fem.vtu` and summary headers for peak nodal von Mises stress in MPa, maximum displacement in mm, and mesh counts.
+- XYZ coordinates and element size are in millimetres. `forceN` is the total XYZ force in newtons, distributed over the selected triangles. A coordinate box must contain all three corners of each selected triangle. Give flat faces a small tolerance. STEP requests can also select a Gmsh surface tag with `{"faceId": 1}`. Each fixed region constrains all three translations.
+
+```json
+{
+  "elementSizeMm": 4,
+  "youngsModulusMpa": 200000,
+  "poissonsRatio": 0.3,
+  "fixed": [{"minMm": [-0.01, -5.01, -5.01], "maxMm": [0.01, 5.01, 5.01]}],
+  "loads": [{
+    "region": {"minMm": [99.99, -5.01, -5.01], "maxMm": [100.01, 5.01, 5.01]},
+    "forceN": [0, 0, -100]
+  }]
+}
+```
+
+This example fixes the end at X = 0 and loads the X = 100 end of a 100 × 10 × 10 mm beam centred on Y and Z. Save the JSON as `fem-config.json`, set `XR3D_API_TOKEN` in your shell, and submit from PowerShell with `curl.exe -H "Authorization: Bearer $env:XR3D_API_TOKEN" -F "model=@beam.stl" -F "config=<fem-config.json" -o beam.vtu http://127.0.0.1:8000/api/v1/fem/solve`.
+
+The worker adapts [Strecs3D's mesh, solver and export workflow](../external/Strecs3D-2.1.0/FEM/fem_pipeline.cpp) for the backend. Results use quadratic tetrahedra, an isotropic linear elastic solid, and a static load case. `Stress` is the scalar von Mises field in Pa used by the Strecs3D VTU importer. `StressTensor` is in Pa, `Displacement` is in mm, and `Strain` is dimensionless. The calculation describes the solid and material properties provided. Printed-part layer bonding, infill, nonlinear failure and infill generation require separate models. See the [Strecs3D license](STRECS3D-LICENSE).
+
 Authenticated `/ready` returns inference/slicer configuration status, not live provider or GPU validation. The pending-job queue defaults to 8 (`XR3D_MAX_PENDING_JOBS`). Waiting uploads expire after 900 seconds by default (`XR3D_UPLOAD_TTL_SECONDS`, minimum 60). Expiry releases the slot and removes partial input files. You can also cancel an abandoned job. Offline backups and dry-run retention are provided by `python -m backend.maintenance`; stop the API first. See [release operations and acceptance](../docs/release-readiness.md).
 
 The private server also bridges Bambu MQTT/FTPS and FLASHFORGE Adventurer 5M HTTP under authenticated `/api/v1/printers/vendor` routes. These adapters work independently of AI inference configuration. See [printer adapter setup and limitations](../docs/printer-adapters.md), including trusted Bambu certificate installation and the separate printer LAN access/check code.
