@@ -37,8 +37,6 @@ Download it from android play store:
 ## 🖨️ [XR3D: 3D Printing Any Images](https://play.google.com/store/apps/details?id=com.feaxr.xr3d)
 ## Use the phone workflows
 
-## Use the phone workflows
-
 ### Prepare your first filament print
 
 Open **Home → First Print** to load a small built-in cube, import a model, or make one from photos. Select a printer and confirm the loaded filament, then slice and use **View layers** to inspect the toolpath before starting the print. **Practice without a printer** uses the phone's slicer and keeps the result in preview mode. For server-assisted workflows, use **Find XR3D Server** in Settings, then tap the discovered server and enter its setup code.
