@@ -1,5 +1,6 @@
-"""Regression checks for the optional isolated engine and its authenticated API."""
+"""Regression checks for the print worker and its authenticated API."""
 import json
+from importlib.util import find_spec
 from pathlib import Path
 import socket
 import threading
@@ -11,7 +12,7 @@ import trimesh
 from fastapi.testclient import TestClient
 from backend.config import settings
 from backend.main import app
-from backend.services.print_engine import python_path
+from backend.services import print_engine
 from backend.services.vendor_printers import VendorProfile
 
 
@@ -32,13 +33,13 @@ def test_inspection_requires_auth_and_stl(api):
 
 
 def test_missing_engine_returns_an_explanation(api, tmp_path, monkeypatch):
-    monkeypatch.setenv("XR3D_PRINT_ENGINE_PYTHON", str(tmp_path / "missing-python"))
+    monkeypatch.setattr(print_engine, "python_path", lambda: tmp_path / "missing-python")
     response = api.get("/api/v1/print-engine")
     assert response.status_code == 503
     assert "XR3D Print Engine" in response.json()["detail"] or "XR3D print engine" in response.json()["detail"]
 
 
-@pytest.mark.skipif(not python_path().is_file(), reason="Install the separate print engine to run its process tests")
+@pytest.mark.skipif(find_spec("kiln") is None, reason="Install the XR3D backend dependencies")
 def test_default_engine_inspects_real_stl(api):
     assert api.get("/api/v1/print-engine").json()["name"] == "XR3D Print Engine"
     model = trimesh.creation.box(extents=(16, 16, 2))
@@ -124,7 +125,7 @@ def printer_fixture():
         thread.join()
 
 
-@pytest.mark.skipif(not python_path().is_file(), reason="Install the separate print engine to run its process tests")
+@pytest.mark.skipif(find_spec("kiln") is None, reason="Install the XR3D backend dependencies")
 def test_real_adapter_fallback_upload_start_and_controls(api):
     with printer_fixture() as (profile, calls):
         path = "/api/v1/printers/vendor/"

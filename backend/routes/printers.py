@@ -3,6 +3,7 @@ import asyncio
 import ftplib
 import httpx
 from collections import OrderedDict
+from dataclasses import dataclass
 import tempfile
 from pathlib import Path
 import time
@@ -19,7 +20,15 @@ router = APIRouter(prefix="/printers/vendor", tags=["Vendor printers"], dependen
 capacity = asyncio.Semaphore(4)
 # Receipts contain only target identity + remote filename/checksum, never credentials.
 receipts = OrderedDict()
-device_locks = {}
+
+
+@dataclass
+class PrinterLease:
+    lock: asyncio.Lock
+    requests: int = 0
+
+
+device_locks: dict[str, PrinterLease] = {}
 
 
 class StartRequest(BaseModel):
@@ -41,20 +50,32 @@ async def perform(profile, operation):
     # A per-target lock prevents polling and physical commands racing each other.
     key = profile.identity()
     if key not in device_locks and len(device_locks) >= 32:
-        raise HTTPException(429, "Printer bridge target limit reached; restart the private server to clear it")
-    lock = device_locks.setdefault(key, asyncio.Lock())
+        raise HTTPException(429, "Too many active printer targets. Try again shortly.")
+    # Keep the entry while any request is holding or waiting for this lock.
+    entry = device_locks.get(key)
+    if entry is None:
+        entry = device_locks[key] = PrinterLease(asyncio.Lock())
+    entry.requests += 1
     def run():
         device = adapter(profile)
         try: return operation(device)
         finally: device.close()
     try:
-        async with capacity, lock:
+        async with entry.lock, capacity:
             # Thread work must finish before releasing its device lock, including
             # when a phone disconnects. Never retry a command automatically.
             task = asyncio.create_task(asyncio.to_thread(run))
             try: return await asyncio.shield(task)
             except asyncio.CancelledError:
-                await task
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not task.cancelled():
+                    task.exception()
                 raise
     except EngineUnavailable as error:
         raise HTTPException(503, str(error)) from error
@@ -64,6 +85,10 @@ async def perform(profile, operation):
         raise HTTPException(502, str(error)) from error
     except (OSError, ValueError, RuntimeError, ftplib.Error, httpx.HTTPError) as error:
         raise HTTPException(502, "Printer transport failed. Check LAN connectivity, credentials, certificate and printer state before retrying.") from error
+    finally:
+        entry.requests -= 1
+        if entry.requests == 0:
+            device_locks.pop(key)
 
 
 @router.post("/status")

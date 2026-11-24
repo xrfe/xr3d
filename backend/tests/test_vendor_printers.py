@@ -1,9 +1,11 @@
 """Protocol fixtures only: no tests contact a physical printer or cloud service."""
 from contextlib import contextmanager
+import asyncio
 import base64
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import socket
 import ssl
 import threading
@@ -14,6 +16,49 @@ from PIL import Image
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.config import settings
+
+
+def test_bridge_releases_old_targets_and_serializes_active_requests(monkeypatch):
+    from backend.routes import printers
+
+    monkeypatch.setattr(printers, "device_locks", {})
+    monkeypatch.setattr(printers, "adapter", lambda _: SimpleNamespace(close=lambda: None))
+
+    async def exercise():
+        for target in range(40):
+            profile = SimpleNamespace(identity=lambda: str(target))
+            await printers.perform(profile, lambda _: None)
+            assert not printers.device_locks
+
+        profile = SimpleNamespace(identity=lambda: "active")
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+        release = threading.Event()
+
+        def first_operation(_):
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+
+        first = asyncio.create_task(printers.perform(profile, first_operation))
+        await asyncio.wait_for(entered.wait(), 5)
+        second = asyncio.create_task(printers.perform(profile, lambda _: "second"))
+        try:
+            await asyncio.sleep(0)
+            assert printers.device_locks["active"].requests == 2
+            assert not second.done()
+            first.cancel()
+            await asyncio.sleep(0)
+            first.cancel()
+            await asyncio.sleep(0)
+            assert not second.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert await second == "second"
+        assert not printers.device_locks
+
+    asyncio.run(exercise())
 from backend.routes import printers as routes
 from backend.services import vendor_printers as vendors
 

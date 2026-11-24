@@ -58,6 +58,28 @@ def test_fem_requires_auth_and_reports_missing_runtime(client, monkeypatch):
     assert solve(client, ("beam.stl", beam_stl()), {**OPTIONS, "loads": []}).status_code == 422
 
 
+def directional_options(direction):
+    return {**OPTIONS, "youngsModulusMpa": None, "poissonsRatio": None, "transverseIsotropy": {
+        "inPlaneYoungsModulusMpa": 2_000, "throughLayerYoungsModulusMpa": 1_000,
+        "inPlanePoissonsRatio": 0, "crossPlanePoissonsRatio": 0,
+        "crossPlaneShearModulusMpa": 400, "buildDirection": direction,
+    }}
+
+
+def test_directional_validation_and_planned_cases(client):
+    capabilities = client.get("/api/v1/fem").json()
+    assert "transversely-isotropic" in capabilities["materialModels"]
+    assert "thermo-mechanical-coupling" in capabilities["plannedAnalyses"]
+    model = ("beam.stl", b"not meshed for this test")
+    response = solve(client, model, directional_options([0, 0, 0]))
+    assert response.status_code == 422 and "nonzero build direction" in response.json()["detail"]
+    unstable = directional_options([0, 0, 1])
+    unstable["transverseIsotropy"]["crossPlanePoissonsRatio"] = 3
+    response = solve(client, model, unstable)
+    assert response.status_code == 422 and "stable material" in response.json()["detail"]
+    assert solve(client, model, {**OPTIONS, "analysis": "print-warping"}).status_code == 422
+
+
 def test_quadratic_face_load_preserves_the_total_applied_force():
     face = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [.5, 0, 0], [.5, .5, 0], [0, .5, 0]])
     points = np.vstack((face, face + [0, 0, 1])).astype(float)
@@ -214,3 +236,18 @@ def test_mobile_bundle_uses_solved_exterior_fields_and_keeps_vtu(client):
     np.testing.assert_allclose(values[:, 3], stress[corresponding], rtol=1e-6)
     np.testing.assert_allclose(values[:, 4], np.linalg.norm(displacement[corresponding], axis=1), rtol=1e-6)
     assert not list(settings.DATA_DIR.iterdir())
+
+
+@requires_fem
+@pytest.mark.parametrize(("direction", "expected"), [([0, 0, 1], .05), ([1, 0, 0], .10)])
+def test_directional_solve_matches_rotated_axial_response(client, direction, expected):
+    options = directional_options(direction)
+    options["loads"] = [{**OPTIONS["loads"][0], "forceN": [100, 0, 0]}]
+    response = solve(client, ("beam.stl", beam_stl()), options)
+    assert response.status_code == 200, response.text[:400]
+    assert response.headers["x-xr3d-fem-material-model"] == "transversely-isotropic"
+    assert float(response.headers["x-xr3d-max-displacement-mm"]) == pytest.approx(expected, rel=.015)
+    assert np.isfinite(float(response.headers["x-xr3d-fem-energy-error"]))
+    assert int(response.headers["x-xr3d-fem-mesh-passes"]) >= 2
+
+

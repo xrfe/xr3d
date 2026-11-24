@@ -24,7 +24,7 @@ def main():
         raise SystemExit("Use a loopback HTTP URL or an HTTPS XR3D API URL.")
     python = python_path()
     if not python.is_file():
-        raise SystemExit("Install the XR3D print engine with python -m backend.install_print_engine.")
+        raise SystemExit("Run Install XR3D Server to set up the print engine.")
     environment = worker_environment()
     environment.update(XR3D_MCP_API=args.api.rstrip("/"), XR3D_MCP_TOKEN=token,
                        XR3D_MCP_MODELS=str(args.model_dir.resolve()))

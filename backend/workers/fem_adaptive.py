@@ -59,22 +59,24 @@ def mesh_fields(gmsh, options, regions, sizing):
     fields.setAsBackgroundMesh(minimum)
 
 
-def read_integration_stress(path: Path, elements):
+def read_integration_stress(path: Path, elements, orientation=None):
     stress = np.full((elements, 4, 6), np.nan)
     with path.open(encoding="ascii") as result:
         for line in result:
             parts = line.split()
-            if len(parts) == 8 and parts[0].isdigit() and parts[1].isdigit():
+            # CalculiX may append the name of the local material frame.
+            has_stresses = len(parts) == 8 or (len(parts) == 9 and parts[8] == orientation)
+            if has_stresses and parts[0].isdigit() and parts[1].isdigit():
                 element, point = map(int, parts[:2])
                 if not 1 <= element <= elements or not 1 <= point <= 4 or np.isfinite(stress[element-1, point-1]).any():
                     raise ValueError("Invalid CalculiX integration point output")
-                stress[element-1, point-1] = parts[2:]
+                stress[element-1, point-1] = parts[2:8]
     if not np.isfinite(stress).all():
         raise ValueError("Incomplete CalculiX integration point stresses")
     return stress
 
 
-def element_errors(points, tetrahedra, stress, poisson):
+def element_errors(points, tetrahedra, stress, poisson, transverse=None):
     corners = tetrahedra[:, :4]
     barycentric_derivative = np.vstack((-np.ones(3), np.eye(3)))
     derivative = (4 * GAUSS - 1)[:, :, None] * barycentric_derivative
@@ -98,9 +100,19 @@ def element_errors(points, tetrahedra, stress, poisson):
     difference = np.einsum("ij,ejk->eik", GAUSS, nodal) - stress
 
     def energy(stress_tensor):
-        normal, shear = stress_tensor[..., :3], stress_tensor[..., 3:]
-        # The common 1/E term cancels in the relative energy error.
-        return (1 + poisson) * ((normal**2).sum(axis=2) + 2 * (shear**2).sum(axis=2)) - poisson * normal.sum(axis=2)**2
+        if transverse is None:
+            normal, shear = stress_tensor[..., :3], stress_tensor[..., 3:]
+            # The common 1/E term cancels in the relative energy error.
+            return (1 + poisson) * ((normal**2).sum(axis=2) + 2 * (shear**2).sum(axis=2)) - poisson * normal.sum(axis=2)**2
+        # CalculiX prints local stresses as S11, S22, S33, S12, S13, S23.
+        # Contract with the engineering compliance, scaled by the in-plane modulus.
+        s1, s2, s3, s12, s13, s23 = np.moveaxis(stress_tensor, -1, 0)
+        plane_e = transverse.inPlaneYoungsModulusMpa
+        return (s1**2 + s2**2 + (plane_e / transverse.throughLayerYoungsModulusMpa) * s3**2
+                - 2 * transverse.inPlanePoissonsRatio * s1 * s2
+                - 2 * transverse.crossPlanePoissonsRatio * (s1 + s2) * s3
+                + (plane_e / transverse.in_plane_shear) * s12**2
+                + (plane_e / transverse.crossPlaneShearModulusMpa) * (s13**2 + s23**2))
 
     squared_errors = np.maximum((energy(difference) * weights).sum(axis=1), 0)
     reference = float((energy(stress) * weights).sum())

@@ -1,13 +1,51 @@
 import json
+import asyncio
 import sys
 import pytest
 import trimesh
 from fastapi.testclient import TestClient
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 from backend.main import app
 from backend.config import settings
 from backend.routes import slicer
 from backend.services.slicing import SlicingOptions
+
+
+def test_disconnected_slice_stops_process_and_releases_slot(tmp_path, monkeypatch):
+    async def exercise():
+        messages = asyncio.Queue()
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        class Process:
+            returncode = None
+
+            def kill(self):
+                self.returncode = -1
+                stopped.set()
+
+            async def wait(self):
+                await stopped.wait()
+                return self.returncode
+
+        async def spawn(*_args, **_kwargs):
+            started.set()
+            return Process()
+
+        monkeypatch.setattr(slicer.asyncio, "create_subprocess_exec", spawn)
+        monkeypatch.setattr(slicer, "slicer_lock", asyncio.Lock())
+        request = Request({"type": "http"}, receive=messages.get)
+        task = asyncio.create_task(slicer.run_prusa_slicer(request, ["fake-slicer"], tmp_path / "first.log"))
+        await asyncio.wait_for(started.wait(), 2)
+        await messages.put({"type": "http.disconnect"})
+        with pytest.raises(HTTPException) as error:
+            await asyncio.wait_for(task, 2)
+        assert error.value.status_code == 499
+        assert stopped.is_set()
+        assert not slicer.slicer_lock.locked()
+
+    asyncio.run(exercise())
 
 
 def config(**changes):
@@ -46,7 +84,8 @@ def test_unsupported_settings_fail_instead_of_using_defaults(field, value):
 
 
 def test_http_slicing_preserves_settings_and_requires_calibrated_profile(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    missing_data_dir = tmp_path / "new-data-directory"
+    monkeypatch.setattr(settings, "DATA_DIR", missing_data_dir)
     monkeypatch.setattr(settings, "API_TOKEN", "test-token")
     monkeypatch.setenv("XR3D_SLICER_EXECUTABLE", sys.executable)
     monkeypatch.delenv("XR3D_SLICER_PROFILE", raising=False)
@@ -70,6 +109,7 @@ def test_http_slicing_preserves_settings_and_requires_calibrated_profile(tmp_pat
     monkeypatch.setattr(slicer.asyncio, "create_subprocess_exec", run)
     result = submit(config())
     assert result.status_code == 200 and b"G1 X1" in result.content
+    assert missing_data_dir.is_dir()
     expected = {"--fill-pattern": "triangles", "--support-material-style": "organic", "--first-layer-height": "0.24",
                 "--top-solid-layers": "6", "--bottom-solid-layers": "5", "--support-material-threshold": "50.0",
                 "--filament-density": "1.27", "--brim-width": "0", "--load": str(profile)}

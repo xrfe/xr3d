@@ -7,6 +7,7 @@ from backend.services.inference import available
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from backend.config import settings
+from backend.routes.pairing import router as pairing_router
 from backend.routes.docs import ASSETS as DOCS_ASSETS, router as docs_router
 from backend.routes.reconstruction import router as reconstruction_router, lifespan
 from backend.routes.providers import router as providers_router
@@ -31,6 +32,7 @@ app.include_router(print_engine_router, prefix=settings.API_PREFIX)
 app.include_router(fem_router, prefix=settings.API_PREFIX)
 app.include_router(slm_router, prefix=settings.API_PREFIX)
 app.include_router(resin_router, prefix=settings.API_PREFIX)
+app.include_router(pairing_router, prefix=settings.API_PREFIX)
 app.include_router(docs_router)
 app.mount(f"{settings.API_PREFIX}/docs-assets", StaticFiles(directory=DOCS_ASSETS), name="docs_assets")
 

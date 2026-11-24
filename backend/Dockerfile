@@ -1,11 +1,12 @@
 FROM python:3.12-slim
 WORKDIR /app
-COPY backend/requirements.lock.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake calculix-ccx libglu1-mesa \
+    && rm -rf /var/lib/apt/lists/*
+COPY backend/requirements.lock.txt backend/requirements.upstream.txt /app/backend/
+RUN python -m venv /opt/xr3d-env
+ENV PATH=/opt/xr3d-env/bin:$PATH
+RUN python -m pip install --no-cache-dir -r backend/requirements.lock.txt && python -m pip check
 COPY backend /app/backend
-COPY external/Kiln-main/kiln /app/external/Kiln-main/kiln
-COPY external/Kiln-main/LICENSE external/Kiln-main/SKILL.md /app/external/Kiln-main/
-RUN python -m backend.install_print_engine
 ENV XR3D_DATA_DIR=/data
 EXPOSE 8000
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["/opt/xr3d-env/bin/python", "-m", "backend.serve", "--host", "0.0.0.0", "--port", "8000"]

@@ -2,12 +2,3 @@
 !backend/
 !backend/**
 backend/**/__pycache__/
-!external/
-!external/Kiln-main/
-!external/Kiln-main/LICENSE
-!external/Kiln-main/SKILL.md
-!external/Kiln-main/kiln/
-!external/Kiln-main/kiln/**
-external/Kiln-main/kiln/build/
-external/Kiln-main/kiln/tests/
-external/Kiln-main/kiln/src/*.egg-info/

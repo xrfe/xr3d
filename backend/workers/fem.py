@@ -248,6 +248,36 @@ def boundary_regions(points, exterior, selected):
     return np.asarray(summaries)
 
 
+PRINT_LAYER_ORIENTATION = "PRINT_LAYERS"
+
+
+def write_material(output, options):
+    material = options.transverseIsotropy
+    output.write("*MATERIAL,NAME=PART_MATERIAL\n")
+    section = "*SOLID SECTION,ELSET=PART,MATERIAL=PART_MATERIAL"
+    if material is None:
+        output.write(f"*ELASTIC\n{options.youngsModulusMpa:.12g},{options.poissonsRatio:.12g}\n")
+    else:
+        plane_e = material.inPlaneYoungsModulusMpa
+        cross_g = material.crossPlaneShearModulusMpa
+        constants = (plane_e, plane_e, material.throughLayerYoungsModulusMpa,
+                     material.inPlanePoissonsRatio, material.crossPlanePoissonsRatio,
+                     material.crossPlanePoissonsRatio, material.in_plane_shear, cross_g)
+        output.write("*ELASTIC,TYPE=ENGINEERING CONSTANTS\n")
+        output.write(",".join(format(value, ".12g") for value in constants) + f"\n{cross_g:.12g}\n")
+        z = np.asarray(material.buildDirection)
+        z = z / np.max(np.abs(z))
+        z /= np.linalg.norm(z)
+        x = np.eye(3)[np.argmin(np.abs(z))]
+        x = x - np.dot(x, z) * z
+        x /= np.linalg.norm(x)
+        y = np.cross(z, x)
+        output.write(f"*ORIENTATION,NAME={PRINT_LAYER_ORIENTATION}\n")
+        output.write(",".join(format(value, ".12g") for value in (*x, *y)) + "\n")
+        section += f",ORIENTATION={PRINT_LAYER_ORIENTATION}"
+    output.write(section + "\n")
+
+
 def prepare(folder, source, mobile=False, previous=None):
     options = FemOptions.model_validate_json((folder / "request.json").read_text())
     if source.suffix == ".stl" and any(isinstance(region, Face) for region in [*options.fixed, *(load.region for load in options.loads)]):
@@ -287,17 +317,16 @@ def prepare(folder, source, mobile=False, previous=None):
         output.write("*ELEMENT,TYPE=C3D10,ELSET=PART\n")
         for index, nodes in enumerate(tetrahedra, 1):
             output.write(f"{index},{','.join(str(node + 1) for node in nodes)}\n")
-        output.write("*MATERIAL,NAME=PART_MATERIAL\n*ELASTIC\n")
-        output.write(f"{options.youngsModulusMpa:.12g},{options.poissonsRatio:.12g}\n")
-        output.write("*SOLID SECTION,ELSET=PART,MATERIAL=PART_MATERIAL\n*BOUNDARY\n")
+        write_material(output, options)
+        output.write("*BOUNDARY\n")
         for node in fixed:
             output.write(f"{node + 1},1,3,0\n")
         output.write("*STEP\n*STATIC\n*CLOAD\n")
         for node, axis in zip(*np.nonzero(np.abs(loads) > 1e-12)):
             output.write(f"{node + 1},{axis + 1},{loads[node, axis]:.12g}\n")
-        output.write("*NODE FILE\nU\n*EL FILE\nS,E\n")
+        output.write("*NODE FILE\nU\n*EL FILE,GLOBAL=YES\nS,E\n")
         if options.meshMode == "adaptive":
-            output.write("*EL PRINT,ELSET=PART\nS\n")
+            output.write("*EL PRINT,ELSET=PART,GLOBAL=NO\nS\n")
         output.write("*END STEP\n")
 
 
@@ -413,8 +442,10 @@ def convert(folder, mobile=False):
     options = FemOptions.model_validate_json((folder / "request.json").read_text())
     if options.meshMode == "adaptive":
         try:
-            integration = read_integration_stress(folder / "analysis.dat", len(tetrahedra))
-            errors, estimate = element_errors(points, tetrahedra, integration, options.poissonsRatio)
+            orientation = PRINT_LAYER_ORIENTATION if options.transverseIsotropy else None
+            integration = read_integration_stress(folder / "analysis.dat", len(tetrahedra), orientation)
+            errors, estimate = element_errors(points, tetrahedra, integration, options.poissonsRatio,
+                                              options.transverseIsotropy)
             compliance = float(np.sum(loads * displacement))
             if not np.isfinite(compliance) or compliance <= 0:
                 raise ValueError("The solution did not provide positive load work")

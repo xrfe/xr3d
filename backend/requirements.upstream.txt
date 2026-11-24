@@ -1,0 +1,8 @@
+# Published upstream releases. To use a fork, replace the corresponding requirement
+# with a wheel URL or a source archive pinned to a full commit, then resolve the lock.
+# https://github.com/codeofaxel/Kiln
+kiln3d==1.5.1
+# https://github.com/drlukeparry/pyslm
+PythonSLM==0.6.1
+# https://github.com/drlukeparry/pyclipr (PySLM's clipping library, built from source on Linux)
+pyclipr==0.1.8

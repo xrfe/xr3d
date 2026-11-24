@@ -2,6 +2,7 @@
 import asyncio
 import os
 from pathlib import Path
+import sys
 import tempfile
 
 from fastapi import HTTPException
@@ -14,13 +15,12 @@ from backend.config import settings
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = ROOT / "backend" / "workers" / "slm.py"
 MAX_MODEL_BYTES = 24 * 1024 * 1024
-UNAVAILABLE = "Install PySLM in .venv-slm or configure XR3D_SLM_PYTHON"
+UNAVAILABLE = "Run Install XR3D Server to set up PySLM."
 preview_slot = asyncio.Lock()
 
 
 def worker_python() -> Path:
-    default = ROOT / ".venv-slm" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    return Path(os.getenv("XR3D_SLM_PYTHON") or default).expanduser().absolute()
+    return Path(sys.executable)
 
 
 async def run_worker(executable: Path, *arguments: str, timeout: int) -> int:

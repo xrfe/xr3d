@@ -30,7 +30,9 @@ WORK_CHANGE_TARGET = 0.02
 async def fem_status():
     return {"configured": fem_dependencies_available() and solver_executable() is not None,
             "analysis": "linear-static-solid", "inputFormats": ["STEP", "STL"], "outputFormat": "VTU",
-            "meshModes": ["uniform", "automatic", "adaptive"]}
+            "meshModes": ["uniform", "automatic", "adaptive"],
+            "materialModels": ["isotropic", "transversely-isotropic"],
+            "plannedAnalyses": ["residual-stress", "print-warping", "thermo-mechanical-coupling"]}
 
 
 async def run_stage(args, cwd, log, failure):
@@ -122,13 +124,16 @@ async def solve(model: UploadFile = File(...), config: str = Form(...),
     try:
         options = FemOptions.model_validate_json(config)
     except ValidationError as error:
+        issue = error.errors()[0]
+        if issue["type"] == "value_error":
+            raise HTTPException(422, issue["msg"].removeprefix("Value error, ")) from error
         raise HTTPException(422, "Invalid FEM settings. Specify mesh size, elastic properties, fixed regions, and loads") from error
     suffix = Path(model.filename or "").suffix.lower()
     if suffix not in SUPPORTED_MODELS:
         raise HTTPException(422, "Select a STEP or closed STL model")
     executable = solver_executable()
     if not executable or not fem_dependencies_available():
-        raise HTTPException(503, "Install requirements.fem.txt and configure XR3D_CCX_EXECUTABLE")
+        raise HTTPException(503, "Run Install XR3D Server and check that CalculiX is available")
     if fem_slot.locked():
         raise HTTPException(429, "A FEM solve is already running; try again when it finishes")
     mobile = output_format == "mobile"
@@ -163,6 +168,7 @@ async def solve(model: UploadFile = File(...), config: str = Form(...),
                        "X-XR3D-Max-Displacement-Mm": str(summary["maxDisplacementMm"]),
                        "X-XR3D-FEM-Mesh-Method": summary["method"],
                        "X-XR3D-FEM-Mesh-Status": status,
+                       "X-XR3D-FEM-Material-Model": ("transversely-isotropic" if options.transverseIsotropy else "isotropic"),
                        "X-XR3D-FEM-Mesh-Passes": str(len(history)),
                        "X-XR3D-FEM-Preview-Simplified": str(summary["previewSimplified"]).lower()}
             for key, name in (("energyError", "Energy-Error"), ("sampledDeviationMm", "Surface-Deviation-Mm")):

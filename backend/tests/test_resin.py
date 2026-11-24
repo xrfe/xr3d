@@ -1,4 +1,5 @@
 from io import BytesIO
+from importlib.util import find_spec
 import json
 from zipfile import ZipFile
 
@@ -10,7 +11,7 @@ import trimesh
 
 from backend.config import settings
 from backend.main import app
-from backend.routes.layer_previews import worker_python
+from backend.routes import layer_previews
 
 
 OPTIONS = {"layerThicknessMm": 0.5, "pixelSizeMm": 0.1, "buildVolumeMm": [120, 68, 150], "rotationDeg": [0, 0]}
@@ -31,7 +32,7 @@ def preview(client, mesh, **options):
 
 
 def test_resin_requires_auth_and_valid_options(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("XR3D_SLM_PYTHON", str(tmp_path / "missing-python"))
+    monkeypatch.setattr(layer_previews, "worker_python", lambda: tmp_path / "missing-python")
     assert client.get("/api/v1/resin", headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert client.get("/api/v1/resin").json()["configured"] is False
     mesh = trimesh.creation.box()
@@ -40,7 +41,7 @@ def test_resin_requires_auth_and_valid_options(client, monkeypatch, tmp_path):
     assert preview(client, mesh, exposureSeconds=2).status_code == 422
 
 
-@pytest.mark.skipif(not worker_python().is_file(), reason="Install the optional PySLM runtime")
+@pytest.mark.skipif(find_spec("pyslm") is None, reason="Install the XR3D backend dependencies")
 def test_resin_masks_preserve_holes_and_report_area_volume(client):
     assert client.get("/api/v1/resin").json()["configured"] is True
     mesh = trimesh.creation.annulus(r_min=3, r_max=6, height=2.25, sections=96)
@@ -66,7 +67,7 @@ def test_resin_masks_preserve_holes_and_report_area_volume(client):
     assert list(settings.DATA_DIR.iterdir()) == []
 
 
-@pytest.mark.skipif(not worker_python().is_file(), reason="Install the optional PySLM runtime")
+@pytest.mark.skipif(find_spec("pyslm") is None, reason="Install the XR3D backend dependencies")
 def test_resin_build_volume_checks_rotated_geometry(client):
     mesh = trimesh.creation.box(extents=(16, 6, 4))
     assert preview(client, mesh, buildVolumeMm=[8, 8, 20]).status_code == 422
@@ -75,5 +76,6 @@ def test_resin_build_volume_checks_rotated_geometry(client):
     with ZipFile(BytesIO(response.content)) as archive:
         manifest = json.loads(archive.read("manifest.json"))
     assert manifest["modelSizeMm"] == pytest.approx([4, 6, 16])
+    assert manifest["buildDirectionInModel"] == pytest.approx([-1, 0, 0], abs=1e-12)
     assert len(manifest["layers"]) == 32
     assert list(settings.DATA_DIR.iterdir()) == []

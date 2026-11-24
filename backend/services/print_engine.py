@@ -1,12 +1,12 @@
-"""Bounded local calls to the isolated XR3D print worker."""
+"""Bounded calls to the print worker in the backend's Python environment."""
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = ROOT / "backend" / "workers" / "print_engine.py"
-ENVIRONMENT = ROOT / ".venv-print"
 SUPPORTED_PRINTERS = frozenset({"OCTOPRINT", "MOONRAKER_KLIPPER", "PRUSA_LINK", "DUET"})
 
 
@@ -23,9 +23,8 @@ class EngineTimeout(EngineError):
 
 
 def python_path():
-    default = ENVIRONMENT / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    # A POSIX virtual environment's python may be a symlink to the base interpreter.
-    return Path(os.environ.get("XR3D_PRINT_ENGINE_PYTHON") or default).expanduser().absolute()
+    # Keep the executable's venv path even when it is a symlink.
+    return Path(sys.executable)
 
 
 def worker_environment():
@@ -43,7 +42,7 @@ def worker_environment():
 def run_engine(operation, *, timeout=30, **parameters):
     executable = python_path()
     if not executable.is_file():
-        raise EngineUnavailable("Install the XR3D print engine on the server.")
+        raise EngineUnavailable("Run Install XR3D Server to set up the XR3D Print Engine.")
     request = json.dumps({"operation": operation, **parameters}, allow_nan=False).encode("utf-8")
     try:
         process = subprocess.run([str(executable), "-I", str(WORKER)], input=request, stdout=subprocess.PIPE,

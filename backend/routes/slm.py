@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.routes.layer_previews import preview_response, runtime_configured, worker_python
+from backend.routes.layer_previews import preview_response, runtime_configured
 from backend.security import require_token
 
 router = APIRouter(prefix="/slm", tags=["SLM preparation"], dependencies=[Depends(require_token)])

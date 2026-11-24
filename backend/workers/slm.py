@@ -1,4 +1,4 @@
-"""Generate SLM scan paths and resin layer masks in the separate PySLM runtime."""
+"""Generate SLM scan paths and resin layer masks in a bounded worker process."""
 from io import BytesIO
 import json
 import math
@@ -120,6 +120,8 @@ def prepare_resin(folder):
     part.origin = [0.0, 0.0, 0.0]
     part.rotation = [*options["rotationDeg"], 0.0]
     part.dropToPlatform()
+    # Express the printer's +Z in the original model frame, before tilting for the preview.
+    build_direction = part.getTransform()[2, :3].tolist()
     bounds = part.geometry.bounds
     extents = bounds[1] - bounds[0]
     if np.any(extents > np.array(options["buildVolumeMm"]) + 1e-6):
@@ -165,7 +167,8 @@ def prepare_resin(folder):
         manifest = {"schemaVersion": 1, "kind": "resinPreview", "machineReady": False, "engine": "PySLM",
                     "pixelSizeMm": pitch, "widthPx": width_px, "heightPx": height_px,
                     "modelSizeMm": extents.tolist(), "buildVolumeMm": options["buildVolumeMm"],
-                    "rotationDeg": options["rotationDeg"], "estimatedCuredVolumeMm3": volume, "layers": layers}
+                    "rotationDeg": options["rotationDeg"], "buildDirectionInModel": build_direction,
+                    "estimatedCuredVolumeMm3": volume, "layers": layers}
         archive.writestr("manifest.json", json.dumps(manifest, allow_nan=False), compress_type=ZIP_DEFLATED)
 
 

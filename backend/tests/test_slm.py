@@ -1,4 +1,5 @@
 from io import BytesIO
+from importlib.util import find_spec
 import json
 from zipfile import ZipFile
 
@@ -9,7 +10,7 @@ import trimesh
 
 from backend.config import settings
 from backend.main import app
-from backend.routes import slm
+from backend.routes import layer_previews, slm
 
 
 OPTIONS = {"layerThicknessMm": 0.5, "hatchSpacingMm": 0.4, "hatchAngleDeg": 5, "layerRotationDeg": 67}
@@ -30,7 +31,7 @@ def preview(client, mesh_bytes, config=OPTIONS):
 
 
 def test_slm_validates_requests_without_optional_runtime(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("XR3D_SLM_PYTHON", str(tmp_path / "missing-python"))
+    monkeypatch.setattr(layer_previews, "worker_python", lambda: tmp_path / "missing-python")
     bad_headers = {"Authorization": "Bearer wrong"}
     assert client.get("/api/v1/slm", headers=bad_headers).status_code == 401
     assert client.post("/api/v1/slm/preview", headers=bad_headers).status_code == 401
@@ -42,8 +43,8 @@ def test_slm_validates_requests_without_optional_runtime(client, monkeypatch, tm
 
 @pytest.mark.parametrize("strategy", ["parallel", "stripe", "island"])
 def test_real_preview_preserves_internal_holes(client, strategy):
-    if not slm.worker_python().is_file():
-        pytest.skip("Install the optional PySLM runtime")
+    if find_spec("pyslm") is None:
+        pytest.skip("Install the XR3D backend dependencies")
     assert client.get("/api/v1/slm").json()["configured"] is True
     mesh = trimesh.creation.annulus(r_min=3, r_max=6, height=2.25, sections=48)
     mesh.apply_translation((4, 9, 7))
@@ -77,8 +78,8 @@ def test_real_preview_preserves_internal_holes(client, strategy):
 
 
 def test_slm_rejects_open_mesh_and_excessive_layer_count(client):
-    if not slm.worker_python().is_file():
-        pytest.skip("Install the optional PySLM runtime")
+    if find_spec("pyslm") is None:
+        pytest.skip("Install the XR3D backend dependencies")
     mesh = trimesh.creation.box(extents=(10, 10, 25))
     response = preview(client, mesh.export(file_type="stl"), {**OPTIONS, "layerThicknessMm": 0.01})
     assert response.status_code == 422, response.text
